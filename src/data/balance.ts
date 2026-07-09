@@ -7,14 +7,43 @@ export const CORE = { maxHp: 100, radius: 24 };
 
 export const START_GOLD = 100;
 
+/** 구조물 철거 시 기본 환급 비율 (누적 투자 = 건설 + 업그레이드 기준) */
+export const DEMOLISH_REFUND = 0.5;
+
+/** 구조물 업그레이드 (구조물만, 유닛 성장은 드래프트 카드로) */
+export const UPGRADE = {
+  maxLevel: 3,
+  /** 단계별 비용 = 기본가 × costPct[현재 레벨] */
+  costPct: [1.0, 1.5, 2.25],
+  /** 단계당 공격력 +50% */
+  damagePerLevel: 0.5,
+  /** 프로스트 전용: 단계당 감속률 +10%p */
+  frostSlowPerLevel: 0.1,
+};
+
+/** 보스 HP 테이블 (웨이브 번호 → HP). 등록되지 않은 웨이브는 ENEMIES.boss.hp 사용 */
+export const BOSS_HP: Record<number, number> = { 5: 500, 10: 1200, 15: 2500, 20: 5000 };
+
+/** 유닛 베테랑 진급 (막타 킬 기준). 사망·부활해도 킬과 계급 유지. 구조물 성장은 골드 업그레이드 */
+export const VETERAN = {
+  /** 계급별 필요 누적 킬 (index 0 → 계급 1) */
+  killThresholds: [5, 15],
+  /** 계급별 공격력 보너스 */
+  damageBonus: [0.3, 0.6],
+  /** 최고 계급(정예) 도달 시 최대 HP 보너스 */
+  eliteHpBonus: 0.3,
+  rankNames: ['베테랑', '정예'],
+};
+
 export const GRID = {
   cellSize: 64,
-  // 레벨별 half-extent (2 → 5×5, 3 → 7×7, 4 → 9×9, 5 → 11×11)
-  halfExtents: [2, 3, 4, 5],
+  // 레벨별 half-extent (1 → 3×3, 2 → 5×5, 3 → 7×7, 4 → 9×9)
+  // 공간이 희소자원이 되도록 작게 시작한다. 확장 = 커버리지를 스폰 방향으로 전진
+  halfExtents: [1, 2, 3, 4],
 };
 
 // 레벨 2/3/4 도달에 필요한 누적 XP
-export const XP_THRESHOLDS = [30, 90, 200];
+export const XP_THRESHOLDS = [20, 60, 140];
 
 export type EnemyKey = 'grunt' | 'runner' | 'tank' | 'boss';
 
@@ -69,11 +98,12 @@ export interface PlaceableDef {
 }
 
 export const PLACEABLES: Record<PlaceableKey, PlaceableDef> = {
+  // 사거리는 그리드 대비 짧게 유지 — 배치 위치가 곧 커버리지가 되도록 (그리드 확장의 가치)
   swordsman: { name: '검병',     short: '검', kind: 'unit',      cost: 30, hp: 60,  damage: 8,  rate: 1,   range: 72,  melee: true, color: 0x4d7dd0 },
-  archer:    { name: '궁수',     short: '궁', kind: 'unit',      cost: 40, hp: 30,  damage: 10, rate: 1,   range: 200, projectileSpeed: 360, color: 0x5dbb63 },
-  cannon:    { name: '캐논',     short: '캐', kind: 'structure', cost: 70, hp: 100, damage: 25, rate: 0.8, range: 250, projectileSpeed: 360, color: 0x3a5a8c },
-  mortar:    { name: '모르타르', short: '모', kind: 'structure', cost: 90, hp: 80,  damage: 10, rate: 0.5, range: 200, projectileSpeed: 220, aoeRadius: 60, color: 0xc9863a },
-  frost:     { name: '프로스트', short: '프', kind: 'structure', cost: 50, hp: 80,  damage: 2,  rate: 1,   range: 150, slow: { pct: 0.4, duration: 1.5 }, color: 0x63c3d1 },
+  archer:    { name: '궁수',     short: '궁', kind: 'unit',      cost: 40, hp: 30,  damage: 10, rate: 1,   range: 150, projectileSpeed: 360, color: 0x5dbb63 },
+  cannon:    { name: '캐논',     short: '캐', kind: 'structure', cost: 70, hp: 100, damage: 25, rate: 0.8, range: 170, projectileSpeed: 360, color: 0x3a5a8c },
+  mortar:    { name: '모르타르', short: '모', kind: 'structure', cost: 90, hp: 80,  damage: 10, rate: 0.5, range: 160, projectileSpeed: 220, aoeRadius: 60, color: 0xc9863a },
+  frost:     { name: '프로스트', short: '프', kind: 'structure', cost: 50, hp: 80,  damage: 2,  rate: 1,   range: 120, slow: { pct: 0.4, duration: 1.5 }, color: 0x63c3d1 },
 };
 
 export const PLACEABLE_ORDER: PlaceableKey[] = ['swordsman', 'archer', 'cannon', 'mortar', 'frost'];

@@ -22,7 +22,7 @@
 ## 코드 구조
 
 - `src/main.ts` — Phaser Game 설정, 씬 등록
-- `src/data/` — 밸런스·웨이브 데이터 테이블
-- `src/scenes/` — Boot / Title / Game(BUILD⇄WAVE 상태 머신) / UI(HUD, Game 위 병렬 실행)
-- `src/entities/` — Enemy(자폭형/공격형), Placeable(유닛/구조물 공통)
+- `src/data/` — 밸런스·웨이브·드래프트 카드 데이터 테이블
+- `src/scenes/` — Boot / Title / Game(BUILD⇄WAVE⇄DRAFT 상태 머신) / UI(HUD, Game 위 병렬 실행) / Draft(3택1 오버레이)
+- `src/entities/` — Enemy(자폭형/공격형), Placeable(유닛/구조물 공통), Projectile(homing/lob/pierce)
 - `src/systems/Grid.ts` — 셀↔월드 좌표, 점유 관리, 레벨 확장

@@ -14,7 +14,7 @@ export class TitleScene extends Phaser.Scene {
       .text(cx, cy - 140, 'WAVE DEFENCE', { fontSize: '56px', color: '#f5d547', fontFamily: 'sans-serif' })
       .setOrigin(0.5);
     this.add
-      .text(cx, cy - 80, '프로토타입 (M0~M2)', { fontSize: '18px', color: '#888888', fontFamily: 'sans-serif' })
+      .text(cx, cy - 80, '프로토타입 (M0~M3)', { fontSize: '18px', color: '#888888', fontFamily: 'sans-serif' })
       .setOrigin(0.5);
 
     this.add

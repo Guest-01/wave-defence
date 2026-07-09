@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { CORE, ENEMIES, PLACEABLES, PLACEABLE_ORDER, WORLD, type PlaceableKey } from '../data/balance';
+import { ENEMIES, PLACEABLES, PLACEABLE_ORDER, WORLD, type PlaceableKey } from '../data/balance';
 import { DIRECTION_KO, WAVES } from '../data/waves';
 import type { GameScene } from './GameScene';
 
@@ -82,7 +82,7 @@ export class UIScene extends Phaser.Scene {
     const g = this.game_;
     if (!g || !g.scene.isActive()) return;
 
-    this.hpText.setText(`♥ 코어 ${Math.ceil(g.coreHp)}/${CORE.maxHp}`);
+    this.hpText.setText(`♥ 코어 ${Math.ceil(g.coreHp)}/${g.coreMaxHp}`);
     this.goldText.setText(`골드 ${g.gold}G`);
     this.waveText.setText(`웨이브 ${Math.min(g.waveIndex + 1, WAVES.length)}/${WAVES.length}`);
 
@@ -130,7 +130,7 @@ export class UIScene extends Phaser.Scene {
     );
     this.overlay.push(
       this.add
-        .text(cx, cy - 10, victory ? '프로토타입의 모든 웨이브를 막아냈습니다.' : '다시 도전해 보세요.', {
+        .text(cx, cy - 10, victory ? '20번의 웨이브를 모두 막아내고 코어를 지켜냈습니다!' : '다시 도전해 보세요.', {
           ...TEXT_STYLE,
           fontSize: '18px',
         })
