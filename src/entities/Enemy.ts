@@ -56,7 +56,7 @@ export class Enemy {
   }
 
   update(dt: number, scene: GameScene): void {
-    const now = scene.time.now;
+    const now = scene.gameNow;
     // 틴트 우선순위: 피격 플래시(흰색) > 빙결 > 슬로우
     if (now < this.flashUntil) this.body.setTint(0xffffff);
     else if (now < this.frozenUntil) this.body.setTint(FROZEN_COLOR);
@@ -81,7 +81,7 @@ export class Enemy {
     }
 
     // 코어를 향해 이동 (슬로우 반영)
-    const slowed = scene.time.now < this.slowUntil;
+    const slowed = scene.gameNow < this.slowUntil;
     const speed = this.def.speed * (slowed ? 1 - this.slowPct : 1);
     const dx = scene.grid.cx - this.x;
     const dy = scene.grid.cy - this.y;
@@ -133,7 +133,7 @@ export class Enemy {
       return;
     }
     // 피격 반응: 흰색 플래시 + 살짝 커졌다 복귀 (절대값 복귀 → 연타 시 드리프트 없음)
-    this.flashUntil = scene.time.now + HIT_FLASH_MS;
+    this.flashUntil = scene.gameNow + HIT_FLASH_MS;
     this.body.setTint(0xffffff);
     this.body.setScale(this.baseScale * 1.18);
     scene.tweens.add({ targets: this.body, scale: this.baseScale, duration: 90 });
@@ -143,11 +143,11 @@ export class Enemy {
 
   applySlow(pct: number, durationSec: number, scene: GameScene): void {
     this.slowPct = pct;
-    this.slowUntil = scene.time.now + durationSec * 1000;
+    this.slowUntil = scene.gameNow + durationSec * 1000;
   }
 
   applyFreeze(durationSec: number, scene: GameScene): void {
-    this.frozenUntil = scene.time.now + durationSec * 1000;
+    this.frozenUntil = scene.gameNow + durationSec * 1000;
   }
 
   /** 슬로우 또는 빙결 상태인지 (약점 포착 카드 판정용) */

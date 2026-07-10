@@ -21,6 +21,7 @@ import { Placeable } from '../entities/Placeable';
 import { Projectile } from '../entities/Projectile';
 import { Grid, type Cell } from '../systems/Grid';
 import { Sfx } from '../systems/Sfx';
+import { TextButton, UI, panel } from '../systems/ui';
 
 export type Phase = 'BUILD' | 'WAVE' | 'DRAFT' | 'END';
 
@@ -72,7 +73,7 @@ interface GroundFire {
 }
 
 interface StructUi {
-  parts: (Phaser.GameObjects.Rectangle | Phaser.GameObjects.Text)[];
+  parts: { destroy(): void }[];
   openedAt: number;
 }
 
@@ -103,6 +104,19 @@ export class GameScene extends Phaser.Scene {
   private ghost: Ghost | null = null;
   private drag: DragState | null = null;
   private structUi: StructUi | null = null;
+  /** 처치한 적 총합 (결과 요약용) */
+  totalKills = 0;
+  /** 전투 배속 (1/2/3). WAVE에서만 적용 */
+  gameSpeed = 1;
+  /** 배속이 반영된 게임 시간(ms) — 슬로우·빙결·화염 등 타이머 기준 */
+  gameNow = 0;
+  /** 사거리 상시 표시 토글 (BUILD·WAVE) */
+  showRanges = false;
+  private rangeGfx!: Phaser.GameObjects.Graphics;
+  private previewGfx!: Phaser.GameObjects.Graphics;
+  private previewLabels: Phaser.GameObjects.Text[] = [];
+  private previewDirty = true;
+  private lastPhase: Phase = 'BUILD';
 
   constructor() {
     super('Game');
@@ -149,6 +163,14 @@ export class GameScene extends Phaser.Scene {
     this.ghost = null;
     this.drag = null;
     this.structUi = null;
+    this.totalKills = 0;
+    this.gameSpeed = 1;
+    this.gameNow = 0;
+    this.showRanges = false;
+    this.previewDirty = true;
+    this.lastPhase = 'BUILD';
+    this.previewLabels = [];
+    this.applyTimeScale();
 
     this.input.mouse?.disableContextMenu();
 
@@ -157,6 +179,11 @@ export class GameScene extends Phaser.Scene {
 
     this.gridGfx = this.add.graphics().setDepth(0);
     this.drawGrid();
+
+    // 사거리 상시 표시 오버레이 + 스폰 방향 예고 (BUILD 전용)
+    this.rangeGfx = this.add.graphics().setDepth(0);
+    this.previewGfx = this.add.graphics().setDepth(6);
+    this.tweens.add({ targets: this.previewGfx, alpha: 0.5, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
 
     // 코어 (화면의 초점 — 발광 + 맥동 링)
     const core = this.add.image(this.grid.cx, this.grid.cy, 'core').setDepth(1);
@@ -182,6 +209,8 @@ export class GameScene extends Phaser.Scene {
       else this.requestPause();
     });
     this.input.keyboard?.on('keydown-P', () => this.requestPause());
+    this.input.keyboard?.on('keydown-R', () => this.toggleRanges());
+    this.input.keyboard?.on('keydown-F', () => this.cycleSpeed());
 
     this.setupUnitDrag();
 
@@ -189,8 +218,25 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, deltaMs: number): void {
+    if (this.phase !== this.lastPhase) {
+      this.onPhaseChange(this.phase);
+      this.lastPhase = this.phase;
+    }
+    // 스폰 방향 화살표 (BUILD 전용)
+    if (this.phase === 'BUILD' && this.previewDirty) {
+      this.redrawArrows();
+      this.previewDirty = false;
+    }
+    // 사거리 오버레이 (BUILD·WAVE, 켜져 있으면 매 프레임 갱신)
+    const canRange = this.phase === 'BUILD' || this.phase === 'WAVE';
+    this.rangeGfx.setVisible(this.showRanges && canRange);
+    if (this.showRanges && canRange) this.drawRangeOverlay();
+
     if (this.phase !== 'WAVE') return;
-    const dt = deltaMs / 1000;
+    // 배속 반영: 실제 delta에 배속 계수를 곱해 게임 시간·이동을 스케일
+    const scaled = deltaMs * this.gameSpeed;
+    this.gameNow += scaled;
+    const dt = scaled / 1000;
 
     this.waveClock += dt;
     while (this.pending.length > 0 && this.pending[0].at <= this.waveClock) {
@@ -216,6 +262,106 @@ export class GameScene extends Phaser.Scene {
     this.cancelPlacement();
     this.closeStructUi();
     this.scene.launch('Pause');
+  }
+
+  // ── 오버레이 (사거리 표시 · 스폰 방향 예고) · 배속 ─────────────
+
+  /** 사거리 상시 표시 토글 (HUD 버튼·R키) — BUILD·WAVE 모두 */
+  toggleRanges(): void {
+    this.showRanges = !this.showRanges;
+    this.sfx.play('place');
+  }
+
+  /** 전투 배속 순환 (×1 → ×2 → ×3). HUD 버튼·F키 */
+  cycleSpeed(): void {
+    const steps = [1, 2, 3];
+    this.gameSpeed = steps[(steps.indexOf(this.gameSpeed) + 1) % steps.length];
+    this.applyTimeScale();
+  }
+
+  /** WAVE에서만 배속 적용 (트윈·타이머 이벤트도 함께 스케일) */
+  private applyTimeScale(): void {
+    const s = this.phase === 'WAVE' ? this.gameSpeed : 1;
+    this.time.timeScale = s;
+    this.tweens.timeScale = s;
+  }
+
+  private onPhaseChange(phase: Phase): void {
+    this.applyTimeScale();
+    const build = phase === 'BUILD';
+    this.previewGfx.setVisible(build);
+    for (const l of this.previewLabels) l.setVisible(build);
+    if (build) {
+      this.previewDirty = true;
+    } else {
+      this.previewGfx.clear();
+      this.clearPreviewLabels();
+    }
+  }
+
+  private drawRangeOverlay(): void {
+    const rg = this.rangeGfx;
+    rg.clear();
+    for (const p of this.placeables) {
+      if (!p.alive) continue;
+      rg.fillStyle(p.def.color, 0.05);
+      rg.fillCircle(p.x, p.y, p.def.range);
+      rg.lineStyle(1, p.def.color, 0.4);
+      rg.strokeCircle(p.x, p.y, p.def.range);
+    }
+  }
+
+  private redrawArrows(): void {
+    const pg = this.previewGfx;
+    pg.clear();
+    this.clearPreviewLabels();
+    const wave = WAVES[this.waveIndex];
+    if (!wave) return;
+    const byDir = new Map<Direction, Map<EnemyKey, number>>();
+    for (const grp of wave.groups) {
+      const m = byDir.get(grp.direction) ?? new Map<EnemyKey, number>();
+      m.set(grp.enemy, (m.get(grp.enemy) ?? 0) + grp.count);
+      byDir.set(grp.direction, m);
+    }
+    for (const [dir, comp] of byDir) this.drawDirIndicator(dir, comp);
+  }
+
+  private drawDirIndicator(dir: Direction, comp: Map<EnemyKey, number>): void {
+    const cx = this.grid.cx;
+    const cy = this.grid.cy;
+    let x = cx;
+    let y = cy;
+    let ang = 0;
+    let lx = cx;
+    let ly = cy;
+    if (dir === 'right') { x = WORLD.width - 62; y = cy; ang = Math.PI; lx = x; ly = y - 36; }
+    else if (dir === 'left') { x = 62; y = cy; ang = 0; lx = x; ly = y - 36; }
+    else if (dir === 'top') { x = cx; y = 98; ang = Math.PI / 2; lx = x; ly = y - 26; }
+    else { x = cx; y = WORLD.height - 110; ang = -Math.PI / 2; lx = x; ly = y + 30; }
+
+    const g = this.previewGfx;
+    g.save();
+    g.translateCanvas(x, y);
+    g.rotateCanvas(ang);
+    g.fillStyle(0xff5a4d, 0.18);
+    g.fillTriangle(12, -22, 12, 22, 48, 0);
+    g.fillStyle(0xff5a4d, 0.95);
+    g.fillTriangle(16, -13, 16, 13, 40, 0);
+    g.fillRect(-16, -5, 32, 10);
+    g.restore();
+
+    const text = [...comp.entries()].map(([k, c]) => `${ENEMIES[k].name}×${c}`).join(' · ');
+    const label = this.add
+      .text(lx, ly, text, { fontSize: '13px', color: '#ff9a8f', fontFamily: 'sans-serif', fontStyle: 'bold' })
+      .setOrigin(0.5)
+      .setDepth(6)
+      .setShadow(1, 1, '#000000', 3);
+    this.previewLabels.push(label);
+  }
+
+  private clearPreviewLabels(): void {
+    for (const l of this.previewLabels) l.destroy();
+    this.previewLabels = [];
   }
 
   // ── 웨이브 진행 ──────────────────────────────────────────────
@@ -447,7 +593,7 @@ export class GameScene extends Phaser.Scene {
   /** 약점 포착 보너스를 반영해 적에게 피해 적용. source는 막타 킬 크레딧용 */
   applyHit(target: Enemy, baseDamage: number, source?: Placeable): void {
     let dmg = baseDamage;
-    if (this.mods.exposeWeakness && target.isHampered(this.time.now)) {
+    if (this.mods.exposeWeakness && target.isHampered(this.gameNow)) {
       dmg *= 1 + CARD_FX.exposeWeaknessBonus;
     }
     target.takeDamage(dmg, this, source);
@@ -457,6 +603,7 @@ export class GameScene extends Phaser.Scene {
     const i = this.enemies.indexOf(enemy);
     if (i >= 0) this.enemies.splice(i, 1);
     if (killed) {
+      this.totalKills++;
       const isElite = enemy.key === 'tank' || enemy.key === 'boss';
       const mult = this.mods.bounty && isElite ? CARD_FX.bountyMult : 1;
       const gold = enemy.def.gold * mult;
@@ -473,8 +620,8 @@ export class GameScene extends Phaser.Scene {
     if (this.phase === 'END') return;
     this.coreHp -= amount;
     // 피격 체감: 화면 흔들림 (스팸 방지 스로틀)
-    if (this.time.now - this.lastShakeAt > 200) {
-      this.lastShakeAt = this.time.now;
+    if (this.gameNow - this.lastShakeAt > 200) {
+      this.lastShakeAt = this.gameNow;
       this.cameras.main.shake(120, 0.004);
       this.sfx.play('coreHit');
     }
@@ -510,12 +657,12 @@ export class GameScene extends Phaser.Scene {
 
   spawnFireGround(x: number, y: number, radius: number): void {
     const gfx = this.add.circle(x, y, radius, 0xe07030, 0.18).setStrokeStyle(1, 0xe07030, 0.4).setDepth(1);
-    this.fires.push({ x, y, radius, until: this.time.now + CARD_FX.fireGroundDuration * 1000, gfx });
+    this.fires.push({ x, y, radius, until: this.gameNow + CARD_FX.fireGroundDuration * 1000, gfx });
   }
 
   private updateFires(dt: number): void {
     this.fires = this.fires.filter((f) => {
-      if (this.time.now > f.until) {
+      if (this.gameNow > f.until) {
         f.gfx.destroy();
         return false;
       }
@@ -626,6 +773,7 @@ export class GameScene extends Phaser.Scene {
     this.grid.occupy(cell.col, cell.row);
     this.placeables.push(p);
     this.cancelPlacement();
+    this.previewDirty = true;
     this.sfx.play('place');
   }
 
@@ -635,48 +783,74 @@ export class GameScene extends Phaser.Scene {
     if (this.phase !== 'BUILD' || this.ghost || !p.alive) return;
     this.closeStructUi();
 
-    const parts: (Phaser.GameObjects.Rectangle | Phaser.GameObjects.Text)[] = [];
+    const parts: { destroy(): void }[] = [];
+    const cost = p.upgradeCost();
+    const refund = Math.floor(p.invested * this.mods.refundRate);
+    const pw = 196;
+    const ph = 108;
+    // 구조물 위에 띄우되, 상단에 가리면 아래로
+    let py = p.y - 82;
+    if (py - ph / 2 < 64) py = p.y + 82;
+
+    // 이 구조물의 사거리 표시 (판단 보조)
+    const range = this.add
+      .circle(p.x, p.y, p.def.range, p.def.color, 0.06)
+      .setStrokeStyle(1, p.def.color, 0.45)
+      .setDepth(9);
+    parts.push(range);
+
+    // 네온 패널
+    const g = this.add.graphics().setDepth(11);
+    panel(g, p.x - pw / 2, py - ph / 2, pw, ph, {
+      fill: UI.panelFill,
+      fillAlpha: 0.98,
+      border: p.def.color,
+      lineWidth: 2,
+      cut: 12,
+      bracket: true,
+      bracketColor: p.def.color,
+      bracketLen: 14,
+    });
+    parts.push(g);
+
+    const title = this.add
+      .text(p.x, py - ph / 2 + 17, `${p.def.name}${p.level > 0 ? ` +${p.level}` : ''}`, {
+        fontSize: '15px',
+        color: '#eaf2ff',
+        fontFamily: 'sans-serif',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+      .setDepth(12);
+    parts.push(title);
 
     // 강화 버튼
-    const cost = p.upgradeCost();
-    const upLabel = cost === null ? '최대 강화' : `강화 Lv${p.level + 1} (${cost}G)`;
-    const affordable = cost !== null && this.gold >= cost;
-    const upBg = this.add
-      .rectangle(p.x, p.y - 84, 170, 34, 0x222833, 0.95)
-      .setStrokeStyle(1, 0x7ee0a3, 1)
-      .setDepth(11);
-    const upTxt = this.add
-      .text(p.x, p.y - 84, upLabel, { fontSize: '14px', color: '#e8e8e8', fontFamily: 'sans-serif' })
-      .setOrigin(0.5)
-      .setDepth(11);
-    if (affordable) {
-      upBg.setInteractive({ useHandCursor: true });
-      upBg.on('pointerdown', () => {
+    const upLabel = cost === null ? '최대 강화' : `강화 → Lv${p.level + 1}    ${cost} G`;
+    const upBtn = new TextButton(this, p.x, py - 4, pw - 22, 30, upLabel, {
+      variant: 'default',
+      fontSize: 13,
+      depth: 12,
+      cut: 8,
+      onClick: () => {
         if (p.tryUpgrade(this)) {
           this.toast(`${p.def.name} 강화 Lv${p.level}`);
           this.sfx.play('upgrade');
         }
         this.closeStructUi();
-      });
-    } else {
-      upBg.setAlpha(0.5);
-      upTxt.setAlpha(0.5);
-    }
-    parts.push(upBg, upTxt);
+      },
+    });
+    if (cost === null || this.gold < cost) upBtn.setEnabled(false);
+    parts.push(upBtn);
 
     // 철거 버튼 (환급은 누적 투자 기준)
-    const refund = Math.floor(p.invested * this.mods.refundRate);
-    const demoBg = this.add
-      .rectangle(p.x, p.y - 46, 170, 34, 0x222833, 0.95)
-      .setStrokeStyle(1, 0xe05555, 1)
-      .setDepth(11)
-      .setInteractive({ useHandCursor: true });
-    const demoTxt = this.add
-      .text(p.x, p.y - 46, `철거 +${refund}G`, { fontSize: '14px', color: '#e8e8e8', fontFamily: 'sans-serif' })
-      .setOrigin(0.5)
-      .setDepth(11);
-    demoBg.on('pointerdown', () => this.demolish(p));
-    parts.push(demoBg, demoTxt);
+    const demoBtn = new TextButton(this, p.x, py + 32, pw - 22, 30, `철거    +${refund} G`, {
+      variant: 'danger',
+      fontSize: 13,
+      depth: 12,
+      cut: 8,
+      onClick: () => this.demolish(p),
+    });
+    parts.push(demoBtn);
 
     this.structUi = { parts, openedAt: this.time.now };
   }
@@ -689,6 +863,7 @@ export class GameScene extends Phaser.Scene {
     this.grid.vacate(p.col, p.row);
     this.removePlaceable(p);
     this.closeStructUi();
+    this.previewDirty = true;
     this.toast(`철거 +${refund}G`);
     this.sfx.play('demolish');
   }
@@ -737,6 +912,7 @@ export class GameScene extends Phaser.Scene {
       } else {
         p.setCell(fromCol, fromRow, this);
       }
+      this.previewDirty = true;
     });
   }
 

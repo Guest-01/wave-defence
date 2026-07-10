@@ -273,6 +273,7 @@ export class IconButton {
     private drawIcon: IconDraw,
     onClick: () => void,
     depth = 40,
+    private activeColor: number = UI.accent,
   ) {
     this.g = scene.add.graphics().setDepth(depth);
     this.iconGfx = scene.add.graphics().setDepth(depth + 1);
@@ -288,7 +289,7 @@ export class IconButton {
     const bx = this.x - s / 2;
     const by = this.y - s / 2;
     const pts = chamfer(bx, by, s, s, 7);
-    const border = this.active ? UI.danger : this.hovered ? UI.accent : UI.panelBorder;
+    const border = this.active ? this.activeColor : this.hovered ? UI.accent : UI.panelBorder;
     this.g.clear();
     this.g.fillStyle(this.hovered ? UI.panelHover : UI.panelFill2, 0.92);
     this.g.fillPoints(pts, true);
@@ -308,6 +309,15 @@ export class IconButton {
     return this;
   }
 
+  setVisible(v: boolean): this {
+    this.g.setVisible(v);
+    this.iconGfx.setVisible(v);
+    this.zone.setVisible(v);
+    if (v) this.zone.setInteractive({ useHandCursor: true });
+    else this.zone.disableInteractive();
+    return this;
+  }
+
   destroy(): void {
     this.g.destroy();
     this.iconGfx.destroy();
@@ -321,6 +331,22 @@ export const drawPauseIcon: IconDraw = (g, cx, cy) => {
   g.fillStyle(0xeaf3ff, 1);
   g.fillRoundedRect(cx - 7.5, cy - 9, 5, 18, 1.5);
   g.fillRoundedRect(cx + 2.5, cy - 9, 5, 18, 1.5);
+};
+
+/** 사거리(레이더 타깃): 동심원 + 중심점 + 십자 눈금 */
+export const drawRangeIcon: IconDraw = (g, cx, cy, active) => {
+  const col = active ? UI.accent : 0xbcd0e8;
+  g.lineStyle(2, col, 1);
+  g.strokeCircle(cx, cy, 9);
+  g.lineStyle(1.5, col, 0.75);
+  g.strokeCircle(cx, cy, 4.5);
+  g.fillStyle(col, 1);
+  g.fillCircle(cx, cy, 1.8);
+  g.lineStyle(1.5, col, 0.9);
+  g.lineBetween(cx, cy - 12, cx, cy - 9);
+  g.lineBetween(cx, cy + 9, cx, cy + 12);
+  g.lineBetween(cx - 12, cy, cx - 9, cy);
+  g.lineBetween(cx + 12, cy, cx + 9, cy);
 };
 
 /** 스피커: 왼쪽 박스 + 오른쪽으로 벌어진 콘 + 음파 (음소거 시 빨간 슬래시) */

@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { ENEMIES, PLACEABLES, PLACEABLE_ORDER, WORLD, type PlaceableKey } from '../data/balance';
 import { DIRECTION_KO, WAVES } from '../data/waves';
-import { IconButton, TextButton, UI, brackets, chamfer, drawMuteIcon, drawPauseIcon, panel, segBar } from '../systems/ui';
+import { IconButton, TextButton, UI, brackets, chamfer, drawMuteIcon, drawPauseIcon, drawRangeIcon, panel, segBar } from '../systems/ui';
 import type { GameScene } from './GameScene';
 
 const BAR_H = 56;
@@ -38,9 +38,14 @@ export class UIScene extends Phaser.Scene {
   private buttons: BarButton[] = [];
   private startBtn!: TextButton;
   private startGlow!: Phaser.GameObjects.Image;
+  private speedBtn!: TextButton;
   private muteBtn!: IconButton;
+  private rangeBtn!: IconButton;
+  private rangeLabel!: Phaser.GameObjects.Text;
   private overlay: Phaser.GameObjects.GameObject[] = [];
   private overlayBtns: TextButton[] = [];
+  private onboardingParts: { destroy(): void }[] = [];
+  private onboardingDone = false;
   private ended = false;
 
   constructor() {
@@ -55,6 +60,8 @@ export class UIScene extends Phaser.Scene {
     this.buttons = [];
     this.overlay = [];
     this.overlayBtns = [];
+    this.onboardingParts = [];
+    this.onboardingDone = false;
     this.ended = false;
 
     this.buildFrame();
@@ -115,7 +122,7 @@ export class UIScene extends Phaser.Scene {
     this.muteBtn = new IconButton(this, w - 28, 28, 36, drawMuteIcon, () => {
       this.game_.sfx.toggleMuted();
       this.game_.sfx.play('place');
-    });
+    }, 40, UI.danger);
     new IconButton(this, w - 70, 28, 36, drawPauseIcon, () => this.game_.requestPause());
 
     const chipG = this.add.graphics().setDepth(1);
@@ -153,6 +160,10 @@ export class UIScene extends Phaser.Scene {
       this.buttons.push(b);
     });
 
+    // 사거리 상시 표시 토글 (BUILD 전용)
+    this.rangeBtn = new IconButton(this, WORLD.width - 262, barY, 44, drawRangeIcon, () => this.game_.toggleRanges());
+    this.rangeLabel = this.add.text(WORLD.width - 290, barY, '사거리\n(R)', { fontSize: '11px', color: UI.textDim, fontFamily: UI.FONT, align: 'right', lineSpacing: 2 }).setOrigin(1, 0.5).setDepth(2);
+
     // 웨이브 시작 버튼 (히어로 — 발광 헤일로 + 맥동)
     const sx = WORLD.width - 122;
     this.startGlow = this.add.image(sx, barY, 'spark').setTint(UI.success).setBlendMode(Phaser.BlendModes.ADD).setDepth(29).setScale(3.6, 1.2).setAlpha(0.32);
@@ -161,6 +172,13 @@ export class UIScene extends Phaser.Scene {
       variant: 'primary',
       fontSize: 19,
       onClick: () => this.game_.startWave(),
+    });
+
+    // 배속 버튼 (WAVE 전용, 시작 버튼 자리) — ×1 → ×2 → ×3
+    this.speedBtn = new TextButton(this, sx, barY, 208, CARD_H, '▶▶  배속 ×1', {
+      variant: 'default',
+      fontSize: 18,
+      onClick: () => this.game_.cycleSpeed(),
     });
   }
 
@@ -238,10 +256,16 @@ export class UIScene extends Phaser.Scene {
       if (isBuild && affordable) b.zone.setInteractive({ useHandCursor: true });
       else b.zone.disableInteractive();
     }
+    const isWave = g.phase === 'WAVE';
     this.startBtn.setVisible(isBuild);
     this.startGlow.setVisible(isBuild);
+    this.speedBtn.setVisible(isWave).setText(`▶▶  배속 ×${g.gameSpeed}`);
+    // 사거리 토글은 BUILD·WAVE 모두
+    this.rangeBtn.setVisible(isBuild || isWave).setActive(g.showRanges);
+    this.rangeLabel.setVisible(isBuild || isWave);
 
     this.muteBtn.setActive(g.sfx.isMuted());
+    this.updateOnboarding(g, isBuild);
 
     const wave = WAVES[g.waveIndex];
     if (isBuild && wave) {
@@ -255,6 +279,38 @@ export class UIScene extends Phaser.Scene {
       this.ended = true;
       this.showResult(g.victory);
     }
+  }
+
+  // ── 온보딩 (첫 배치 페이즈에만) ──────────────────────────────
+
+  private updateOnboarding(g: GameScene, isBuild: boolean): void {
+    const firstBuild = isBuild && g.waveIndex === 0;
+    if (!this.onboardingDone && firstBuild && this.onboardingParts.length === 0) {
+      this.buildOnboarding();
+    } else if (this.onboardingParts.length > 0 && !firstBuild) {
+      this.clearOnboarding();
+      this.onboardingDone = true;
+    }
+  }
+
+  private buildOnboarding(): void {
+    const cx = WORLD.width / 2;
+    this.hintChip(cx, 132, '▲  화살표 방향에서 적이 온다   ·   R : 사거리 표시');
+    this.hintChip(cx, WORLD.height - 96, '아래 카드 또는 1~5 키로 배치  →  준비되면  ［웨이브 시작］');
+  }
+
+  private hintChip(x: number, y: number, text: string): void {
+    const t = this.add.text(x, y, text, { fontSize: '14px', color: '#eaf3ff', fontFamily: UI.FONT, fontStyle: 'bold' }).setOrigin(0.5).setDepth(46);
+    const w = t.width + 32;
+    const h = 32;
+    const g = this.add.graphics().setDepth(45);
+    panel(g, x - w / 2, y - h / 2, w, h, { fill: 0x0a1526, fillAlpha: 0.94, border: UI.accent, borderAlpha: 0.85, cut: 9, lineWidth: 1.5 });
+    this.onboardingParts.push(g, t);
+  }
+
+  private clearOnboarding(): void {
+    for (const p of this.onboardingParts) p.destroy();
+    this.onboardingParts = [];
   }
 
   // ── 결과 오버레이 ────────────────────────────────────────────
@@ -272,14 +328,34 @@ export class UIScene extends Phaser.Scene {
     this.overlay.push(g);
 
     this.overlay.push(
-      this.add.text(cx, cy - 74, victory ? '승리' : '코어 파괴됨', { fontSize: '48px', color: victory ? '#8ffcd0' : '#ff8a80', fontFamily: UI.FONT, fontStyle: 'bold' }).setOrigin(0.5).setDepth(52).setShadow(0, 0, victory ? '#4ee6a0' : '#ff6b5e', 14),
+      this.add.text(cx, cy - 82, victory ? '승리' : '코어 파괴됨', { fontSize: '46px', color: victory ? '#8ffcd0' : '#ff8a80', fontFamily: UI.FONT, fontStyle: 'bold' }).setOrigin(0.5).setDepth(52).setShadow(0, 0, victory ? '#4ee6a0' : '#ff6b5e', 14),
     );
     this.overlay.push(
-      this.add.text(cx, cy - 22, victory ? '20번의 웨이브를 모두 막아내고 코어를 지켜냈습니다.' : '다시 도전해 보세요.', { fontSize: '16px', color: UI.textDim, fontFamily: UI.FONT }).setOrigin(0.5).setDepth(52),
+      this.add.text(cx, cy - 40, victory ? '20번의 웨이브를 모두 막아내고 코어를 지켜냈습니다.' : '다시 도전해 보세요.', { fontSize: '16px', color: UI.textDim, fontFamily: UI.FONT }).setOrigin(0.5).setDepth(52),
     );
 
-    this.overlayBtns.push(new TextButton(this, cx - 108, cy + 60, 196, 54, '다시 시작', { variant: 'primary', fontSize: 19, depth: 52, onClick: () => this.restartRun() }));
-    this.overlayBtns.push(new TextButton(this, cx + 108, cy + 60, 196, 54, '타이틀로', { variant: 'default', fontSize: 19, depth: 52, onClick: () => this.toTitle() }));
+    // 런 요약
+    const gs = this.game_;
+    const wavesCleared = Math.min(gs.waveIndex, WAVES.length);
+    const elites = gs.placeables.filter((p) => p.def.kind === 'unit' && p.rank >= 2).length;
+    const vets = gs.placeables.filter((p) => p.def.kind === 'unit' && p.rank >= 1).length;
+    const stats: [string, string][] = [
+      ['생존 웨이브', `${wavesCleared} / ${WAVES.length}`],
+      ['처치', `${gs.totalKills}`],
+      ['최종 골드', `${gs.gold}`],
+      ['영토', `Lv.${gs.grid.level}`],
+      ['정예·베테랑', `${elites} · ${vets}`],
+    ];
+    const gap = 92;
+    const startX = cx - (gap * (stats.length - 1)) / 2;
+    stats.forEach(([label, val], i) => {
+      const sx = startX + i * gap;
+      this.overlay.push(this.add.text(sx, cy + 2, val, { fontSize: '22px', color: '#eaf6ff', fontFamily: UI.FONT, fontStyle: 'bold' }).setOrigin(0.5).setDepth(52));
+      this.overlay.push(this.add.text(sx, cy + 26, label, { fontSize: '12px', color: UI.textDim, fontFamily: UI.FONT }).setOrigin(0.5).setDepth(52));
+    });
+
+    this.overlayBtns.push(new TextButton(this, cx - 108, cy + 78, 196, 52, '다시 시작', { variant: 'primary', fontSize: 19, depth: 52, onClick: () => this.restartRun() }));
+    this.overlayBtns.push(new TextButton(this, cx + 108, cy + 78, 196, 52, '타이틀로', { variant: 'default', fontSize: 19, depth: 52, onClick: () => this.toTitle() }));
   }
 
   private restartRun(): void {
