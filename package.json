@@ -1,7 +1,9 @@
 {
   "name": "wave-defence",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.3.0",
+  "description": "코어 중심 그리드 방어 + 로그라이트 드래프트 웨이브 디펜스 (Phaser 4 · TypeScript · Vite)",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
