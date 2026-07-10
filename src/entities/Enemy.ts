@@ -5,6 +5,8 @@ import type { Placeable } from './Placeable';
 
 const HP_BAR_WIDTH = 26;
 const FROZEN_COLOR = 0xbfe8ff;
+const SLOW_COLOR = 0x9fd0ff;
+const HIT_FLASH_MS = 70;
 
 /**
  * 적. 코어를 향해 직진하며, 경로에서 배치물과 접촉하면
@@ -17,12 +19,14 @@ export class Enemy {
   x: number;
   y: number;
 
-  private body: Phaser.GameObjects.Arc;
+  private body: Phaser.GameObjects.Image;
+  private baseScale: number;
   private hpBg: Phaser.GameObjects.Rectangle;
   private hpFill: Phaser.GameObjects.Rectangle;
   private slowUntil = 0;
   private slowPct = 0;
   private frozenUntil = 0;
+  private flashUntil = 0;
   private target: Placeable | null = null;
   private attackingCore = false;
   private attackCooldown = 0;
@@ -35,7 +39,10 @@ export class Enemy {
     this.x = x;
     this.y = y;
 
-    this.body = scene.add.circle(x, y, this.def.radius, this.def.color).setDepth(3);
+    // 스프라이트 높이를 판정 반경에 맞춰 스케일 (radius는 충돌 판정에 계속 사용)
+    this.body = scene.add.image(x, y, key).setDepth(3);
+    this.baseScale = (this.def.radius * 4.4) / this.body.height;
+    this.body.setScale(this.baseScale);
     this.hpBg = scene.add
       .rectangle(x - HP_BAR_WIDTH / 2, y - this.def.radius - 8, HP_BAR_WIDTH, 4, 0x2a2a2a)
       .setOrigin(0, 0.5)
@@ -49,10 +56,14 @@ export class Enemy {
   }
 
   update(dt: number, scene: GameScene): void {
+    const now = scene.time.now;
+    // 틴트 우선순위: 피격 플래시(흰색) > 빙결 > 슬로우
+    if (now < this.flashUntil) this.body.setTint(0xffffff);
+    else if (now < this.frozenUntil) this.body.setTint(FROZEN_COLOR);
+    else if (now < this.slowUntil) this.body.setTint(SLOW_COLOR);
+    else this.body.clearTint();
     // 빙결: 이동·공격 모두 정지
-    const frozen = scene.time.now < this.frozenUntil;
-    this.body.setFillStyle(frozen ? FROZEN_COLOR : this.def.color);
-    if (frozen) return;
+    if (now < this.frozenUntil) return;
 
     // 공격형: 붙잡은 대상을 attackInterval 주기로 타격
     if (this.def.behavior === 'attacker') {
@@ -121,6 +132,11 @@ export class Enemy {
       this.die(scene, true, killer);
       return;
     }
+    // 피격 반응: 흰색 플래시 + 살짝 커졌다 복귀 (절대값 복귀 → 연타 시 드리프트 없음)
+    this.flashUntil = scene.time.now + HIT_FLASH_MS;
+    this.body.setTint(0xffffff);
+    this.body.setScale(this.baseScale * 1.18);
+    scene.tweens.add({ targets: this.body, scale: this.baseScale, duration: 90 });
     this.hpBg.setVisible(true);
     this.hpFill.setVisible(true).setScale(Math.max(this.hp / this.maxHp, 0), 1);
   }
@@ -141,8 +157,8 @@ export class Enemy {
 
   /** 타격 순간 몸체가 커졌다 돌아오는 펀치 연출 */
   private attackVisual(scene: GameScene): void {
-    this.body.setScale(1.35);
-    scene.tweens.add({ targets: this.body, scale: 1, duration: 140 });
+    this.body.setScale(this.baseScale * 1.35);
+    scene.tweens.add({ targets: this.body, scale: this.baseScale, duration: 140 });
   }
 
   private syncVisuals(): void {

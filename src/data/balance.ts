@@ -63,11 +63,11 @@ export interface EnemyDef {
 }
 
 export const ENEMIES: Record<EnemyKey, EnemyDef> = {
-  grunt:  { name: '일반',   behavior: 'kamikaze', hp: 20,  speed: 60,  damage: 5,  gold: 5,   xp: 1,  radius: 10, color: 0xe05555 },
-  runner: { name: '고속',   behavior: 'kamikaze', hp: 10,  speed: 120, damage: 3,  gold: 4,   xp: 1,  radius: 7,  color: 0xe08bd0 },
-  tank:   { name: '탱커',   behavior: 'attacker', hp: 80,  speed: 35,  damage: 5,  attackInterval: 1.0, gold: 15,  xp: 3,  radius: 14, color: 0x9e3030 },
+  grunt:  { name: '일반',   behavior: 'kamikaze', hp: 20,  speed: 60,  damage: 5,  gold: 5,   xp: 1,  radius: 10, color: 0xff5a4d },
+  runner: { name: '고속',   behavior: 'kamikaze', hp: 10,  speed: 120, damage: 3,  gold: 4,   xp: 1,  radius: 7,  color: 0xff9f2e },
+  tank:   { name: '탱커',   behavior: 'attacker', hp: 80,  speed: 35,  damage: 5,  attackInterval: 1.0, gold: 15,  xp: 3,  radius: 14, color: 0xe0463b },
   // 보스 HP는 W5 기준값. 웨이브별 HP(W10 1200 / W15 2500 / W20 5000)는 M3에서 테이블화
-  boss:   { name: '보스',   behavior: 'attacker', hp: 500, speed: 30,  damage: 15, attackInterval: 1.0, gold: 100, xp: 15, radius: 22, color: 0x8844cc },
+  boss:   { name: '보스',   behavior: 'attacker', hp: 500, speed: 30,  damage: 15, attackInterval: 1.0, gold: 100, xp: 15, radius: 22, color: 0xff2e6e },
 };
 
 // 웨이브당 적 HP 증가율: hp × (1 + 0.10 × (웨이브 − 1))
@@ -99,11 +99,11 @@ export interface PlaceableDef {
 
 export const PLACEABLES: Record<PlaceableKey, PlaceableDef> = {
   // 사거리는 그리드 대비 짧게 유지 — 배치 위치가 곧 커버리지가 되도록 (그리드 확장의 가치)
-  swordsman: { name: '검병',     short: '검', kind: 'unit',      cost: 30, hp: 60,  damage: 8,  rate: 1,   range: 72,  melee: true, color: 0x4d7dd0 },
-  archer:    { name: '궁수',     short: '궁', kind: 'unit',      cost: 40, hp: 30,  damage: 10, rate: 1,   range: 150, projectileSpeed: 360, color: 0x5dbb63 },
-  cannon:    { name: '캐논',     short: '캐', kind: 'structure', cost: 70, hp: 100, damage: 25, rate: 0.8, range: 170, projectileSpeed: 360, color: 0x3a5a8c },
-  mortar:    { name: '모르타르', short: '모', kind: 'structure', cost: 90, hp: 80,  damage: 10, rate: 0.5, range: 160, projectileSpeed: 220, aoeRadius: 60, color: 0xc9863a },
-  frost:     { name: '프로스트', short: '프', kind: 'structure', cost: 50, hp: 80,  damage: 2,  rate: 1,   range: 120, slow: { pct: 0.4, duration: 1.5 }, color: 0x63c3d1 },
+  swordsman: { name: '검병',     short: '검', kind: 'unit',      cost: 30, hp: 60,  damage: 8,  rate: 1,   range: 52,  melee: true, color: 0x4aa8ff },
+  archer:    { name: '궁수',     short: '궁', kind: 'unit',      cost: 40, hp: 30,  damage: 10, rate: 1,   range: 150, projectileSpeed: 360, color: 0x35e3c8 },
+  cannon:    { name: '캐논',     short: '캐', kind: 'structure', cost: 70, hp: 100, damage: 25, rate: 0.8, range: 170, projectileSpeed: 360, color: 0x7c8cff },
+  mortar:    { name: '모르타르', short: '모', kind: 'structure', cost: 90, hp: 80,  damage: 10, rate: 0.5, range: 160, projectileSpeed: 220, aoeRadius: 60, color: 0xb98bff },
+  frost:     { name: '프로스트', short: '프', kind: 'structure', cost: 50, hp: 80,  damage: 2,  rate: 1,   range: 120, slow: { pct: 0.4, duration: 1.5 }, color: 0x8fd8ff },
 };
 
 export const PLACEABLE_ORDER: PlaceableKey[] = ['swordsman', 'archer', 'cannon', 'mortar', 'frost'];

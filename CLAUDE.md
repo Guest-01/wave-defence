@@ -21,8 +21,12 @@
 
 ## 코드 구조
 
+- 스프라이트는 외부 파일 없이 코드로 생성 — `src/systems/textures.ts`의 `generateArtTextures()` ("네온 아레나" 아트, 매핑·설계는 기획 문서 8장). `public/assets/sprites/`(옛 Kenney 팩)는 폐기·미사용
 - `src/main.ts` — Phaser Game 설정, 씬 등록
 - `src/data/` — 밸런스·웨이브·드래프트 카드 데이터 테이블
-- `src/scenes/` — Boot / Title / Game(BUILD⇄WAVE⇄DRAFT 상태 머신) / UI(HUD, Game 위 병렬 실행) / Draft(3택1 오버레이)
+- `src/scenes/` — Boot / Title / Game(BUILD⇄WAVE 상태 머신) / UI(HUD, Game 위 병렬 실행) / Draft(3택1 오버레이) / Pause(일시정지 오버레이)
 - `src/entities/` — Enemy(자폭형/공격형), Placeable(유닛/구조물 공통), Projectile(homing/lob/pierce)
 - `src/systems/Grid.ts` — 셀↔월드 좌표, 점유 관리, 레벨 확장
+- `src/systems/Sfx.ts` — WebAudio 생성 효과음 (에셋 파일 없음) + 음소거(localStorage 저장)
+- `src/systems/ui.ts` — 공통 UI 토큰·컴포넌트(네온 팔레트, 둥근 패널, TextButton/IconButton). 전 씬이 공유
+- 신규 UI는 `ui.ts`의 컴포넌트를 재사용한다 (씬마다 네모 박스를 새로 만들지 않는다)

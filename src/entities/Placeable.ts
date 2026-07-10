@@ -31,7 +31,7 @@ export class Placeable {
   /** 적 접촉 판정 반경 */
   readonly contactRadius = 24;
 
-  readonly body: Phaser.GameObjects.Shape;
+  readonly body: Phaser.GameObjects.Image;
   private label: Phaser.GameObjects.Text;
   private hpBg: Phaser.GameObjects.Rectangle;
   private hpFill: Phaser.GameObjects.Rectangle;
@@ -48,17 +48,16 @@ export class Placeable {
     this.x = pos.x;
     this.y = pos.y;
 
-    this.body =
-      this.def.kind === 'structure'
-        ? scene.add.rectangle(pos.x, pos.y, 40, 40, this.def.color)
-        : scene.add.circle(pos.x, pos.y, 16, this.def.color);
-    this.body.setDepth(2);
+    this.body = scene.add.image(pos.x, pos.y, key).setDepth(2);
+    const targetH = this.def.kind === 'structure' ? 66 : 56;
+    this.body.setScale(targetH / this.body.height);
     this.body.setData('placeable', this);
 
     this.label = scene.add
-      .text(pos.x, pos.y, this.def.short, { fontSize: '14px', color: '#ffffff', fontFamily: 'sans-serif' })
+      .text(pos.x, pos.y + 14, this.def.short, { fontSize: '13px', color: '#ffffff', fontFamily: 'sans-serif' })
       .setOrigin(0.5)
-      .setDepth(2);
+      .setDepth(2)
+      .setShadow(1, 1, '#000000', 2);
 
     this.hpBg = scene.add
       .rectangle(pos.x - HP_BAR_WIDTH / 2, pos.y + 26, HP_BAR_WIDTH, 4, 0x2a2a2a)
@@ -104,10 +103,17 @@ export class Placeable {
     const dmg = this.effectiveDamage() * mods.damageMult;
     const slow = this.effectiveSlow();
     const speed = this.def.projectileSpeed ?? PROJECTILE_SPEED;
+    if (!this.def.melee) {
+      scene.sfx.play('shoot');
+      // 총구 섬광 (대상 방향으로 살짝 오프셋)
+      const a = Math.atan2(best.y - this.y, best.x - this.x);
+      scene.muzzleFlash(this.x + Math.cos(a) * 16, this.y + Math.sin(a) * 16, this.def.color);
+    }
 
     if (this.def.melee) {
       // 근접: 즉시 타격
       scene.meleeVisual(this.x, this.y, best.x, best.y, this.def.color);
+      scene.sfx.play('melee');
       if (slow) best.applySlow(slow.pct, slow.duration, scene);
       scene.applyHit(best, dmg, this);
     } else if (this.def.aoeRadius) {
@@ -166,6 +172,7 @@ export class Placeable {
     while (!this.isMaxRank && this.kills >= VETERAN.killThresholds[this.rank]) {
       this.promote();
       scene.toast(`${this.def.name} ${VETERAN.rankNames[this.rank - 1]} 진급!`);
+      scene.sfx.play('promote');
     }
   }
 
@@ -181,7 +188,7 @@ export class Placeable {
       this.maxHp = newMax;
     }
     this.label.setText(this.def.short + '★'.repeat(this.rank));
-    this.body.setStrokeStyle(2, this.rank >= 2 ? 0xf5d547 : 0xffffff, 1);
+    this.label.setColor(this.rank >= 2 ? '#f5d547' : '#ffffff');
   }
 
   /** 업그레이드 반영 슬로우 (프로스트: 단계당 감속률 +10%p) */
@@ -229,6 +236,7 @@ export class Placeable {
         this.hpBg.setVisible(false);
         this.hpFill.setVisible(false);
       } else {
+        scene.deathBurst(this.x, this.y, this.def.color);
         this.destroyVisuals();
         scene.removePlaceable(this);
       }
@@ -253,7 +261,7 @@ export class Placeable {
   /** 시각 요소만 이동 (드래그 중) */
   moveVisual(x: number, y: number): void {
     this.body.setPosition(x, y);
-    this.label.setPosition(x, y);
+    this.label.setPosition(x, y + 14);
     this.hpBg.setPosition(x - HP_BAR_WIDTH / 2, y + 26);
     this.hpFill.setPosition(x - HP_BAR_WIDTH / 2, y + 26);
   }

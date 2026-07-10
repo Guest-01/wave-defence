@@ -33,7 +33,8 @@ export interface ProjectileOpts {
 export class Projectile {
   x: number;
   y: number;
-  private body: Phaser.GameObjects.Arc;
+  private body: Phaser.GameObjects.Image;
+  private trail: Phaser.GameObjects.Particles.ParticleEmitter;
   private tx: number;
   private ty: number;
   private dirX = 0;
@@ -46,12 +47,42 @@ export class Projectile {
     this.y = o.y;
     this.tx = o.tx;
     this.ty = o.ty;
-    this.body = scene.add.circle(o.x, o.y, o.aoeRadius ? 6 : 4, o.color).setDepth(4);
+    // 발광 탄자 (흰 스파크 + tint + 가산 블렌드 → 어두운 아레나에서 빛남)
+    const bodyScale = o.aoeRadius ? 0.72 : 0.42;
+    this.body = scene.add
+      .image(o.x, o.y, 'spark')
+      .setTint(o.color)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setScale(bodyScale)
+      .setDepth(4);
+    // 꼬리 트레일
+    this.trail = scene.add
+      .particles(o.x, o.y, 'spark', {
+        follow: this.body,
+        tint: o.color,
+        blendMode: 'ADD',
+        scale: { start: o.aoeRadius ? 0.5 : 0.3, end: 0 },
+        alpha: { start: 0.55, end: 0 },
+        lifespan: 200,
+        frequency: 16,
+        quantity: 1,
+        speed: 0,
+      })
+      .setDepth(3);
     if (o.pierceDist) {
       const d = Math.hypot(o.tx - o.x, o.ty - o.y) || 1;
       this.dirX = (o.tx - o.x) / d;
       this.dirY = (o.ty - o.y) / d;
     }
+  }
+
+  /** 본체 + 트레일 정리 (트레일은 남은 파티클이 사라진 뒤 제거) */
+  private cleanup(scene: GameScene): void {
+    this.trail.stopFollow();
+    this.trail.stop();
+    this.body.destroy();
+    const t = this.trail;
+    scene.time.delayedCall(240, () => t.destroy());
   }
 
   /** true 반환 시 소멸 (배열에서 제거) */
@@ -68,11 +99,12 @@ export class Projectile {
         if (this.hitEnemies.has(e)) continue;
         if (Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y) <= e.def.radius + 6) {
           this.hitEnemies.add(e);
+          scene.hitSpark(e.x, e.y, this.o.color, 4);
           scene.applyHit(e, this.o.damage, this.o.source);
         }
       }
       if (this.traveled >= this.o.pierceDist) {
-        this.body.destroy();
+        this.cleanup(scene);
         return true;
       }
       return false;
@@ -81,7 +113,7 @@ export class Projectile {
     // 추적 대상이 이미 죽었으면 발사체도 소멸 (피해 없음)
     if (this.o.target) {
       if (this.o.target.hp <= 0) {
-        this.body.destroy();
+        this.cleanup(scene);
         return true;
       }
       this.tx = this.o.target.x;
@@ -95,7 +127,7 @@ export class Projectile {
 
     if (dist <= hitDist || step >= dist) {
       this.impact(scene);
-      this.body.destroy();
+      this.cleanup(scene);
       return true;
     }
 
@@ -107,11 +139,13 @@ export class Projectile {
 
   destroy(): void {
     this.body.destroy();
+    this.trail.destroy();
   }
 
   private impact(scene: GameScene): void {
     if (this.o.aoeRadius) {
       scene.explosionVisual(this.tx, this.ty, this.o.aoeRadius, this.o.color);
+      scene.sfx.play('explosion');
       if (scene.mods.fireGround) scene.spawnFireGround(this.tx, this.ty, this.o.aoeRadius);
       for (const e of [...scene.enemies]) {
         if (Phaser.Math.Distance.Between(this.tx, this.ty, e.x, e.y) <= this.o.aoeRadius + e.def.radius) {
@@ -123,6 +157,8 @@ export class Projectile {
       if (this.o.freeze && Math.random() < this.o.freeze.chance) {
         this.o.target.applyFreeze(this.o.freeze.duration, scene);
       }
+      scene.sfx.play('hit');
+      scene.hitSpark(this.tx, this.ty, this.o.color, 5);
       scene.applyHit(this.o.target, this.o.damage, this.o.source);
     }
   }
