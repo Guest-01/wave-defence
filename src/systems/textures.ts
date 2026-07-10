@@ -36,6 +36,7 @@ export function generateArtTextures(scene: Phaser.Scene): void {
   makeBackground(scene);
   makeSpark(scene);
   makeRing(scene);
+  makeVignette(scene);
   tex(scene, 'shard', 18, 22, drawShard);
   tex(scene, 'slash', 120, 96, drawSlash);
   tex(scene, 'core', 140, 140, drawCore);
@@ -151,6 +152,23 @@ function makeRing(scene: Phaser.Scene): void {
   grad.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, s, s);
+  canvas.refresh();
+}
+
+/** 저체력 경고 비네트 — 가장자리로 갈수록 붉어지는 프레임 (화면 크기로 늘려 사용) */
+function makeVignette(scene: Phaser.Scene): void {
+  const w = 320;
+  const h = 180;
+  const canvas = scene.textures.createCanvas('vignette', w, h);
+  if (!canvas) return;
+  const ctx = canvas.getContext();
+  const grad = ctx.createRadialGradient(w / 2, h / 2, h * 0.32, w / 2, h / 2, w * 0.62);
+  grad.addColorStop(0, 'rgba(255,40,60,0)');
+  grad.addColorStop(0.62, 'rgba(255,40,60,0)');
+  grad.addColorStop(0.85, 'rgba(255,40,60,0.5)');
+  grad.addColorStop(1, 'rgba(255,30,50,0.95)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
   canvas.refresh();
 }
 

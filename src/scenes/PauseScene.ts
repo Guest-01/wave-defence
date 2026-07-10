@@ -24,6 +24,10 @@ export class PauseScene extends Phaser.Scene {
     const cx = WORLD.width / 2;
     const cy = WORLD.height / 2;
 
+    // 오버레이 전체 페이드인
+    this.cameras.main.setAlpha(0);
+    this.tweens.add({ targets: this.cameras.main, alpha: 1, duration: 160, ease: 'Sine.easeOut' });
+
     // 딤 배경 (클릭 차단)
     this.add.rectangle(cx, cy, WORLD.width, WORLD.height, 0x05070e, 0.72).setInteractive();
 
@@ -37,7 +41,8 @@ export class PauseScene extends Phaser.Scene {
 
     this.add
       .text(cx, cy - ph / 2 + 44, '일시정지', { fontSize: '32px', color: '#eaf6ff', fontFamily: UI.FONT, fontStyle: 'bold' })
-      .setOrigin(0.5);
+      .setOrigin(0.5)
+      .setShadow(0, 0, '#3ff0e0', 10);
 
     const g_ = this.game_;
     const wave = Math.min(g_.waveIndex + 1, WAVES.length);
@@ -84,10 +89,13 @@ export class PauseScene extends Phaser.Scene {
   }
 
   private quitToTitle(): void {
-    this.scene.get('UI').input.enabled = true;
-    this.scene.stop('Game');
-    this.scene.stop('UI');
-    this.scene.start('Title');
-    this.scene.stop();
+    this.cameras.main.fadeOut(260, 4, 7, 14);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      this.scene.get('UI').input.enabled = true;
+      this.scene.stop('Game');
+      this.scene.stop('UI');
+      this.scene.start('Title');
+      this.scene.stop();
+    });
   }
 }

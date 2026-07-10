@@ -23,7 +23,10 @@ export const UI = {
   xpTrack: 0x15263a,
   success: 0x4ee6a0,
   danger: 0xff6b5e,
-  FONT: 'sans-serif',
+  /** 한글 본문 (Pretendard, 폴백 시스템 고딕) */
+  FONT: '"Pretendard Variable", Pretendard, "Malgun Gothic", sans-serif',
+  /** 제목·숫자 디스플레이 — 라틴/숫자는 Chakra Petch, 한글 글리프는 Pretendard로 폴백 */
+  FONT_DISPLAY: '"Chakra Petch", "Pretendard Variable", Pretendard, "Malgun Gothic", sans-serif',
 } as const;
 
 type Pt = Phaser.Math.Vector2;
@@ -160,16 +163,18 @@ export interface TextButtonOpts {
   cut?: number;
 }
 
-/** 잘린 모서리 네온 버튼 (호버 발광·활성 상태). 중심 좌표 기준 */
+/** 잘린 모서리 네온 버튼 (호버 발광·프레스·활성 상태). 중심 좌표 기준 */
 export class TextButton {
   private g: Phaser.GameObjects.Graphics;
   private label: Phaser.GameObjects.Text;
   private zone: Phaser.GameObjects.Zone;
   private hovered = false;
+  private pressed = false;
   private enabled = true;
+  private destroyed = false;
 
   constructor(
-    scene: Phaser.Scene,
+    private scene: Phaser.Scene,
     private x: number,
     private y: number,
     private w: number,
@@ -185,8 +190,19 @@ export class TextButton {
       .setDepth(depth + 1);
     this.zone = scene.add.zone(x, y, w, h).setInteractive({ useHandCursor: true }).setDepth(depth + 1);
     this.zone.on('pointerover', () => { this.hovered = true; this.redraw(); });
-    this.zone.on('pointerout', () => { this.hovered = false; this.redraw(); });
-    this.zone.on('pointerdown', () => { if (this.enabled) this.opts.onClick(); });
+    this.zone.on('pointerout', () => { this.hovered = false; this.pressed = false; this.redraw(); });
+    this.zone.on('pointerdown', () => {
+      if (!this.enabled) return;
+      // 눌림 피드백을 잠깐 보여준 뒤 복귀 (onClick이 버튼을 파괴할 수 있으므로 가드)
+      this.pressed = true;
+      this.redraw();
+      this.scene.time.delayedCall(90, () => {
+        if (this.destroyed) return;
+        this.pressed = false;
+        this.redraw();
+      });
+      this.opts.onClick();
+    });
     this.redraw();
   }
 
@@ -204,25 +220,32 @@ export class TextButton {
   private redraw(): void {
     const c = this.palette();
     const cut = this.opts.cut ?? 10;
-    const bx = this.x - this.w / 2;
-    const by = this.y - this.h / 2;
-    const pts = chamfer(bx, by, this.w, this.h, cut);
+    // 눌림: 살짝 안쪽으로 수축 + 아래로 1px (물리 버튼 느낌)
+    const inset = this.pressed ? 2 : 0;
+    const bx = this.x - this.w / 2 + inset;
+    const by = this.y - this.h / 2 + inset + (this.pressed ? 1 : 0);
+    const bw = this.w - inset * 2;
+    const bh = this.h - inset * 2;
+    const pts = chamfer(bx, by, bw, bh, cut);
     this.g.clear();
-    this.g.fillStyle(this.hovered ? c.fillHover : c.fill, 0.97);
+    this.g.fillStyle(this.pressed ? c.fill : this.hovered ? c.fillHover : c.fill, 0.97);
     this.g.fillPoints(pts, true);
-    // 상단 하이라이트 시트
-    this.g.fillStyle(0xffffff, this.hovered ? 0.08 : 0.04);
-    this.g.fillRect(bx + cut, by + 2, this.w - 2 * cut, 3);
+    // 상단 하이라이트 시트 (눌림 시 제거)
+    if (!this.pressed) {
+      this.g.fillStyle(0xffffff, this.hovered ? 0.08 : 0.04);
+      this.g.fillRect(bx + cut, by + 2, bw - 2 * cut, 3);
+    }
     // 발광 테두리
-    this.g.lineStyle(this.hovered ? 7 : 5, c.border, this.hovered ? 0.24 : 0.12);
+    this.g.lineStyle(this.hovered ? 7 : 5, c.border, this.pressed ? 0.32 : this.hovered ? 0.24 : 0.12);
     this.g.strokePoints(pts, true, true);
     this.g.lineStyle(this.hovered ? 2.5 : 2, c.border, 1);
     this.g.strokePoints(pts, true, true);
     // 좌우 짧은 액센트 눈금
     this.g.lineStyle(2, c.border, this.hovered ? 1 : 0.7);
-    this.g.lineBetween(bx + cut + 2, by + this.h / 2 - 6, bx + cut + 2, by + this.h / 2 + 6);
-    this.g.lineBetween(bx + this.w - cut - 2, by + this.h / 2 - 6, bx + this.w - cut - 2, by + this.h / 2 + 6);
+    this.g.lineBetween(bx + cut + 2, by + bh / 2 - 6, bx + cut + 2, by + bh / 2 + 6);
+    this.g.lineBetween(bx + bw - cut - 2, by + bh / 2 - 6, bx + bw - cut - 2, by + bh / 2 + 6);
     this.label.setColor(c.text);
+    this.label.setPosition(this.x, this.y + (this.pressed ? 1 : 0));
   }
 
   setEnabled(e: boolean): this {
@@ -248,7 +271,15 @@ export class TextButton {
     return this;
   }
 
+  /** 등장 트윈용 (씬에서 alpha를 직접 트윈) */
+  setAlpha(a: number): this {
+    this.g.setAlpha(a);
+    this.label.setAlpha(a);
+    return this;
+  }
+
   destroy(): void {
+    this.destroyed = true;
     this.g.destroy();
     this.label.destroy();
     this.zone.destroy();
@@ -263,10 +294,12 @@ export class IconButton {
   private iconGfx: Phaser.GameObjects.Graphics;
   private zone: Phaser.GameObjects.Zone;
   private hovered = false;
+  private pressed = false;
+  private destroyed = false;
   active = false;
 
   constructor(
-    scene: Phaser.Scene,
+    private scene: Phaser.Scene,
     private x: number,
     private y: number,
     private size: number,
@@ -279,13 +312,22 @@ export class IconButton {
     this.iconGfx = scene.add.graphics().setDepth(depth + 1);
     this.zone = scene.add.zone(x, y, size, size).setInteractive({ useHandCursor: true }).setDepth(depth + 1);
     this.zone.on('pointerover', () => { this.hovered = true; this.redraw(); });
-    this.zone.on('pointerout', () => { this.hovered = false; this.redraw(); });
-    this.zone.on('pointerdown', onClick);
+    this.zone.on('pointerout', () => { this.hovered = false; this.pressed = false; this.redraw(); });
+    this.zone.on('pointerdown', () => {
+      this.pressed = true;
+      this.redraw();
+      this.scene.time.delayedCall(90, () => {
+        if (this.destroyed) return;
+        this.pressed = false;
+        this.redraw();
+      });
+      onClick();
+    });
     this.redraw();
   }
 
   private redraw(): void {
-    const s = this.size;
+    const s = this.size - (this.pressed ? 3 : 0);
     const bx = this.x - s / 2;
     const by = this.y - s / 2;
     const pts = chamfer(bx, by, s, s, 7);
@@ -319,6 +361,7 @@ export class IconButton {
   }
 
   destroy(): void {
+    this.destroyed = true;
     this.g.destroy();
     this.iconGfx.destroy();
     this.zone.destroy();

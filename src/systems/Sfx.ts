@@ -12,6 +12,12 @@ export type SfxName =
   | 'upgrade'
   | 'promote'
   | 'card'
+  | 'cardHover'
+  | 'cardDeal'
+  | 'roll'
+  | 'gamblerWin'
+  | 'gamblerLose'
+  | 'bossSpawn'
   | 'coreHit'
   | 'waveStart'
   | 'levelup'
@@ -75,9 +81,9 @@ export class Sfx {
   play(name: SfxName): void {
     if (this.muted) return;
     if (!this.ensure()) return;
-    // 다발성 사운드(발사·명중)는 최소 간격으로 스팸 방지
+    // 다발성 사운드(발사·명중·슬롯 롤링)는 최소 간격으로 스팸 방지
     const now = performance.now();
-    const minGap = name === 'shoot' || name === 'hit' ? 45 : 90;
+    const minGap = name === 'roll' ? 25 : name === 'shoot' || name === 'hit' ? 45 : 90;
     if (now - (this.lastPlayed.get(name) ?? 0) < minGap) return;
     this.lastPlayed.set(name, now);
 
@@ -116,6 +122,30 @@ export class Sfx {
         break;
       case 'card':
         this.tone(880, 1320, 0.15, 'sine', 0.25);
+        break;
+      case 'cardHover':
+        this.tone(950, 1050, 0.035, 'sine', 0.1);
+        break;
+      case 'cardDeal':
+        this.tone(500, 750, 0.06, 'sine', 0.18);
+        this.tone(600, 900, 0.06, 'sine', 0.18, 0.09);
+        this.tone(700, 1050, 0.08, 'sine', 0.18, 0.18);
+        break;
+      case 'roll':
+        this.tone(1400, 1200, 0.025, 'square', 0.08);
+        break;
+      case 'gamblerWin':
+        this.tone(523, 523, 0.1, 'square', 0.28);
+        this.tone(659, 659, 0.1, 'square', 0.28, 0.09);
+        this.tone(784, 784, 0.1, 'square', 0.28, 0.18);
+        this.tone(1047, 1047, 0.25, 'square', 0.3, 0.27);
+        break;
+      case 'gamblerLose':
+        this.tone(360, 180, 0.28, 'sawtooth', 0.2);
+        break;
+      case 'bossSpawn':
+        this.tone(70, 32, 0.6, 'sawtooth', 0.5);
+        this.noise(0.4, 0.3, 200);
         break;
       case 'coreHit':
         this.tone(90, 40, 0.25, 'sawtooth', 0.55);

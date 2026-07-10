@@ -117,6 +117,8 @@ export class GameScene extends Phaser.Scene {
   private previewLabels: Phaser.GameObjects.Text[] = [];
   private previewDirty = true;
   private lastPhase: Phase = 'BUILD';
+  /** 살아 있는 토스트 (겹침 방지 스택) */
+  private toasts: Phaser.GameObjects.Text[] = [];
 
   constructor() {
     super('Game');
@@ -170,8 +172,10 @@ export class GameScene extends Phaser.Scene {
     this.previewDirty = true;
     this.lastPhase = 'BUILD';
     this.previewLabels = [];
+    this.toasts = [];
     this.applyTimeScale();
 
+    this.cameras.main.fadeIn(320, 4, 7, 14);
     this.input.mouse?.disableContextMenu();
 
     // 배경 (방사형 그라디언트 아레나 — 코어로 시선이 모이도록)
@@ -352,7 +356,7 @@ export class GameScene extends Phaser.Scene {
 
     const text = [...comp.entries()].map(([k, c]) => `${ENEMIES[k].name}×${c}`).join(' · ');
     const label = this.add
-      .text(lx, ly, text, { fontSize: '13px', color: '#ff9a8f', fontFamily: 'sans-serif', fontStyle: 'bold' })
+      .text(lx, ly, text, { fontSize: '13px', color: '#ff9a8f', fontFamily: UI.FONT, fontStyle: 'bold' })
       .setOrigin(0.5)
       .setDepth(6)
       .setShadow(1, 1, '#000000', 3);
@@ -458,6 +462,11 @@ export class GameScene extends Phaser.Scene {
         ? (BOSS_HP[waveNumber] ?? ENEMIES.boss.hp) / ENEMIES.boss.hp
         : 1 + WAVE_HP_SCALE * this.waveIndex; // 웨이브 1(index 0) → ×1.0
     this.enemies.push(new Enemy(this, key, x, y, hpScale));
+    if (key === 'boss') {
+      // 보스 입장: 지축이 울리는 흔들림 + 저음
+      this.cameras.main.shake(500, 0.006);
+      this.sfx.play('bossSpawn');
+    }
   }
 
   // ── 드래프트 ─────────────────────────────────────────────────
@@ -484,7 +493,7 @@ export class GameScene extends Phaser.Scene {
   applyCard(key: CardKey): void {
     const def = CARDS[key];
     if (def.unique) this.acquired.add(key);
-    let msg = `「${def.name}」 획득`;
+    let msg: string | null = `「${def.name}」 획득`;
 
     switch (key) {
       case 'pierce':
@@ -532,12 +541,11 @@ export class GameScene extends Phaser.Scene {
         this.coreMaxHp -= CARD_FX.overheatCoreHp;
         this.coreHp = Math.min(this.coreHp, this.coreMaxHp);
         break;
-      case 'gambler': {
-        const won = Phaser.Math.Between(0, CARD_FX.gamblerMax);
-        this.gold += won;
-        msg = `「${def.name}」 결과: +${won}G`;
+      case 'gambler':
+        // 결과는 슬롯 롤링 연출(gamblerReveal)이 끝나는 순간 지급된다
+        this.gamblerReveal();
+        msg = null;
         break;
-      }
       case 'repair':
         this.coreHp = Math.min(this.coreHp + CARD_FX.repairAmount, this.coreMaxHp);
         break;
@@ -564,9 +572,74 @@ export class GameScene extends Phaser.Scene {
         break;
     }
 
-    this.toast(msg);
+    if (msg) this.toast(msg);
     this.sfx.play('card');
     this.phase = 'BUILD';
+  }
+
+  /** 전투 도박사: 슬롯머신식 숫자 롤링 → 결과 착지 (액수 구간별 반응 차등) */
+  private gamblerReveal(): void {
+    const won = Phaser.Math.Between(0, CARD_FX.gamblerMax);
+    const cx = WORLD.width / 2;
+    const cy = 268;
+
+    const g = this.add.graphics().setDepth(20);
+    panel(g, cx - 170, cy - 64, 340, 128, {
+      fill: UI.panelFill,
+      fillAlpha: 0.97,
+      border: UI.goldHex,
+      borderAlpha: 0.9,
+      lineWidth: 2,
+      cut: 14,
+      bracket: true,
+      bracketColor: UI.goldHex,
+      bracketLen: 16,
+    });
+    const label = this.add
+      .text(cx, cy - 38, '전투 도박사', { fontSize: '15px', color: UI.gold, fontFamily: UI.FONT, fontStyle: 'bold' })
+      .setOrigin(0.5)
+      .setDepth(21);
+    const num = this.add
+      .text(cx, cy + 8, '+ ??? G', { fontSize: '46px', color: '#ffffff', fontFamily: UI.FONT_DISPLAY, fontStyle: 'bold' })
+      .setOrigin(0.5)
+      .setDepth(21);
+    const parts = [g, label, num];
+
+    // 롤링: 빠르게 무작위 숫자를 돌리다 점점 느려지며 착지
+    const delays = [50, 50, 50, 50, 60, 60, 70, 80, 90, 110, 130, 160, 200];
+    let acc = 0;
+    for (const d of delays) {
+      acc += d;
+      this.time.delayedCall(acc, () => {
+        num.setText(`+ ${Phaser.Math.Between(0, CARD_FX.gamblerMax)} G`);
+        this.sfx.play('roll');
+      });
+    }
+
+    this.time.delayedCall(acc + 240, () => {
+      const jackpot = won >= CARD_FX.gamblerMax * 0.75;
+      const bust = won < CARD_FX.gamblerMax * 0.25;
+      num.setText(`+ ${won} G`);
+      num.setColor(jackpot ? '#ffd75e' : bust ? '#8ea0bd' : '#eaf6ff');
+      num.setScale(0.6);
+      this.tweens.add({ targets: num, scale: jackpot ? 1.18 : 1, duration: 260, ease: 'Back.easeOut' });
+      this.gold += won;
+      this.sfx.play(jackpot ? 'gamblerWin' : bust ? 'gamblerLose' : 'card');
+      if (jackpot) {
+        this.hitSpark(cx, cy + 8, UI.goldHex, 18);
+        this.cameras.main.shake(150, 0.003);
+      }
+      if (bust) label.setText('아쉽네요...');
+      // 잠깐 보여준 뒤 페이드아웃
+      this.tweens.add({
+        targets: parts,
+        alpha: 0,
+        duration: 320,
+        delay: jackpot ? 1500 : 1100,
+        ease: 'Cubic.easeIn',
+        onComplete: () => parts.forEach((p) => p.destroy()),
+      });
+    });
   }
 
   private placeReinforcements(): void {
@@ -817,7 +890,7 @@ export class GameScene extends Phaser.Scene {
       .text(p.x, py - ph / 2 + 17, `${p.def.name}${p.level > 0 ? ` +${p.level}` : ''}`, {
         fontSize: '15px',
         color: '#eaf2ff',
-        fontFamily: 'sans-serif',
+        fontFamily: UI.FONT,
         fontStyle: 'bold',
       })
       .setOrigin(0.5)
@@ -1094,7 +1167,7 @@ export class GameScene extends Phaser.Scene {
   /** 처치 위치 등에서 떠오르는 작은 텍스트 (+골드 등) */
   floatText(x: number, y: number, msg: string, color: string): void {
     const t = this.add
-      .text(x, y, msg, { fontSize: '14px', color, fontFamily: 'sans-serif' })
+      .text(x, y, msg, { fontSize: '14px', color, fontFamily: UI.FONT_DISPLAY, fontStyle: 'bold' })
       .setOrigin(0.5)
       .setDepth(6);
     this.tweens.add({ targets: t, y: y - 34, alpha: 0, duration: 700, ease: 'Cubic.easeOut', onComplete: () => t.destroy() });
@@ -1103,21 +1176,40 @@ export class GameScene extends Phaser.Scene {
   /** 화면 중앙 상단 대형 배너 (웨이브 시작/클리어, 보스 경고, 영토 확장) */
   banner(msg: string, color: string, delay = 0): void {
     const t = this.add
-      .text(WORLD.width / 2, 210, msg, { fontSize: '44px', color, fontFamily: 'sans-serif', fontStyle: 'bold' })
+      .text(WORLD.width / 2, 210, msg, { fontSize: '44px', color, fontFamily: UI.FONT_DISPLAY, fontStyle: 'bold' })
       .setOrigin(0.5)
       .setDepth(20)
       .setAlpha(0)
-      .setScale(0.7);
+      .setScale(0.7)
+      .setLetterSpacing(4)
+      .setShadow(0, 0, color, 16);
     this.tweens.add({ targets: t, alpha: 1, scale: 1, duration: 180, delay, ease: 'Back.easeOut' });
     this.tweens.add({ targets: t, alpha: 0, delay: delay + 950, duration: 300, onComplete: () => t.destroy() });
   }
 
+  /** 안내 토스트 — 동시에 여러 개가 뜨면 겹치지 않게 세로로 쌓는다 */
   toast(msg: string): void {
+    const y = 110 + this.toasts.length * 28;
     const t = this.add
-      .text(WORLD.width / 2, 110, msg, { fontSize: '18px', color: '#f0c674', fontFamily: 'sans-serif' })
+      .text(WORLD.width / 2, y, msg, { fontSize: '18px', color: '#f0c674', fontFamily: UI.FONT })
       .setOrigin(0.5)
-      .setDepth(20);
-    this.tweens.add({ targets: t, y: 80, alpha: 0, duration: 1600, ease: 'Cubic.easeOut', onComplete: () => t.destroy() });
+      .setDepth(20)
+      .setAlpha(0);
+    this.toasts.push(t);
+    this.tweens.add({ targets: t, alpha: 1, duration: 140 });
+    this.tweens.add({
+      targets: t,
+      y: y - 30,
+      alpha: 0,
+      duration: 1400,
+      delay: 500,
+      ease: 'Cubic.easeOut',
+      onComplete: () => {
+        const i = this.toasts.indexOf(t);
+        if (i >= 0) this.toasts.splice(i, 1);
+        t.destroy();
+      },
+    });
   }
 
   private expandVisual(): void {

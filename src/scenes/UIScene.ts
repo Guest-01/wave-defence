@@ -47,6 +47,16 @@ export class UIScene extends Phaser.Scene {
   private onboardingParts: { destroy(): void }[] = [];
   private onboardingDone = false;
   private ended = false;
+  /** 골드 카운트업 표시값 (-1 = 미초기화) */
+  private shownGold = -1;
+  private lastGold = -1;
+  private goldAccum = 0;
+  private lastGoldFloat = 0;
+  private goldFloatX = 0;
+  private bossLabel!: Phaser.GameObjects.Text;
+  private vignette!: Phaser.GameObjects.Image;
+  /** 코어 HP 바 잔상 (직전 피해량이 밝게 남았다가 줄어든다) */
+  private coreGhost = 1;
 
   constructor() {
     super('UI');
@@ -63,11 +73,31 @@ export class UIScene extends Phaser.Scene {
     this.onboardingParts = [];
     this.onboardingDone = false;
     this.ended = false;
+    this.shownGold = -1;
+    this.lastGold = -1;
+    this.goldAccum = 0;
+    this.lastGoldFloat = 0;
+    this.coreGhost = 1;
 
     this.buildFrame();
     this.buildTopBar();
     this.buildBottomBar();
     this.bindHotkeys();
+
+    // 저체력 경고 비네트 (코어 HP 30% 미만에서 맥동)
+    this.vignette = this.add
+      .image(WORLD.width / 2, WORLD.height / 2, 'vignette')
+      .setDisplaySize(WORLD.width, WORLD.height)
+      .setDepth(44)
+      .setVisible(false);
+
+    // 보스 HP 바 라벨 (바 본체는 barGfx에 매 프레임 그린다)
+    this.bossLabel = this.add
+      .text(WORLD.width / 2 - 216, 89, 'BOSS', { fontSize: '14px', color: '#ff6ea0', fontFamily: UI.FONT_DISPLAY, fontStyle: 'bold' })
+      .setOrigin(1, 0.5)
+      .setDepth(2)
+      .setShadow(0, 0, '#ff2e6e', 8)
+      .setVisible(false);
   }
 
   // ── 화면 프레임 (코너 브래킷) ────────────────────────────────
@@ -110,12 +140,12 @@ export class UIScene extends Phaser.Scene {
 
     // HP / XP 라벨·수치
     this.add.text(14, HP.y + HP.h / 2, '♥ 코어', { fontSize: '14px', color: '#ff8a94', fontFamily: UI.FONT, fontStyle: 'bold' }).setOrigin(0, 0.5).setDepth(2);
-    this.hpText = this.add.text(HP.x + HP.w + 9, HP.y + HP.h / 2, '', { fontSize: '13px', color: UI.text, fontFamily: UI.FONT }).setOrigin(0, 0.5).setDepth(2);
-    this.levelText = this.add.text(14, XP.y + XP.h / 2, 'Lv.1', { fontSize: '13px', color: '#bcd0ff', fontFamily: UI.FONT, fontStyle: 'bold' }).setOrigin(0, 0.5).setDepth(2);
-    this.xpText = this.add.text(XP.x + XP.w + 9, XP.y + XP.h / 2, '', { fontSize: '12px', color: UI.textDim, fontFamily: UI.FONT }).setOrigin(0, 0.5).setDepth(2);
+    this.hpText = this.add.text(HP.x + HP.w + 9, HP.y + HP.h / 2, '', { fontSize: '13px', color: UI.text, fontFamily: UI.FONT_DISPLAY }).setOrigin(0, 0.5).setDepth(2);
+    this.levelText = this.add.text(14, XP.y + XP.h / 2, 'Lv.1', { fontSize: '13px', color: '#bcd0ff', fontFamily: UI.FONT_DISPLAY, fontStyle: 'bold' }).setOrigin(0, 0.5).setDepth(2);
+    this.xpText = this.add.text(XP.x + XP.w + 9, XP.y + XP.h / 2, '', { fontSize: '12px', color: UI.textDim, fontFamily: UI.FONT_DISPLAY }).setOrigin(0, 0.5).setDepth(2);
 
     // 웨이브 + 예고 (중앙 플레이트)
-    this.waveText = this.add.text(cx, 13, '', { fontSize: '21px', color: '#eafcff', fontFamily: UI.FONT, fontStyle: 'bold' }).setOrigin(0.5, 0).setDepth(2).setShadow(0, 0, '#3ff0e0', 10);
+    this.waveText = this.add.text(cx, 13, '', { fontSize: '21px', color: '#eafcff', fontFamily: UI.FONT_DISPLAY, fontStyle: 'bold' }).setOrigin(0.5, 0).setDepth(2).setShadow(0, 0, '#3ff0e0', 10).setLetterSpacing(1.5);
     this.previewText = this.add.text(cx, 42, '', { fontSize: '12px', color: UI.gold, fontFamily: UI.FONT }).setOrigin(0.5, 0).setDepth(2);
 
     // 골드 칩 + 아이콘 버튼 (우측)
@@ -131,7 +161,8 @@ export class UIScene extends Phaser.Scene {
     panel(chipG, chipX, 12, chipW, 32, { fill: 0x1a1608, fillAlpha: 0.9, border: UI.goldHex, borderAlpha: 0.7, cut: 9, lineWidth: 1.5 });
     chipG.fillStyle(UI.goldHex, 1);
     chipG.fillPoints(chamfer(chipX + 12, 22, 12, 12, 3), true);
-    this.goldText = this.add.text(chipX + chipW - 12, 28, '', { fontSize: '17px', color: UI.gold, fontFamily: UI.FONT, fontStyle: 'bold' }).setOrigin(1, 0.5).setDepth(2);
+    this.goldText = this.add.text(chipX + chipW - 12, 28, '', { fontSize: '17px', color: UI.gold, fontFamily: UI.FONT_DISPLAY, fontStyle: 'bold' }).setOrigin(1, 0.5).setDepth(2);
+    this.goldFloatX = chipX + chipW / 2;
   }
 
   // ── 하단 배치 바 ─────────────────────────────────────────────
@@ -218,22 +249,52 @@ export class UIScene extends Phaser.Scene {
 
   // ── 매 프레임 갱신 ───────────────────────────────────────────
 
-  update(): void {
+  update(time: number, delta: number): void {
     const g = this.game_;
     if (!g || !g.scene.isActive()) return;
 
     const hpRatio = Phaser.Math.Clamp(g.coreHp / g.coreMaxHp, 0, 1);
     const next = g.nextXpThreshold();
 
+    // 코어 HP 잔상: 피해 직후 밝은 조각이 남았다가 따라 줄어든다
+    if (hpRatio < this.coreGhost) this.coreGhost = Math.max(hpRatio, this.coreGhost - (delta / 1000) * 0.35);
+    else this.coreGhost = hpRatio;
+
     this.barGfx.clear();
     segBar(this.barGfx, HP.x, HP.y, HP.w, HP.h, hpRatio, { fill: hpRatio < 0.3 ? UI.danger : UI.hp, track: UI.hpTrack, segments: 10, border: 0x50283a });
+    if (this.coreGhost > hpRatio + 0.004) {
+      this.barGfx.fillStyle(0xffd9d0, 0.45);
+      this.barGfx.fillRect(HP.x + HP.w * hpRatio, HP.y + 1, HP.w * (this.coreGhost - hpRatio), HP.h - 2);
+    }
     if (next !== null) {
       segBar(this.barGfx, XP.x, XP.y, XP.w, XP.h, Phaser.Math.Clamp(g.xp / next, 0, 1), { fill: UI.xp, track: UI.xpTrack, segments: 8, border: 0x2b425e });
     }
 
+    // 보스 HP 바 (상단 중앙 플레이트 아래)
+    const boss = g.enemies.find((e) => e.key === 'boss');
+    if (boss && g.phase === 'WAVE') {
+      const bw = 400;
+      const bx = WORLD.width / 2 - bw / 2;
+      const by = 84;
+      this.barGfx.fillStyle(0x0a0510, 0.72);
+      this.barGfx.fillRect(bx - 6, by - 5, bw + 12, 20);
+      segBar(this.barGfx, bx, by, bw, 10, Phaser.Math.Clamp(boss.hp / boss.maxHp, 0, 1), { fill: 0xff2e6e, track: 0x2a0e1a, segments: 12, border: 0x5a2038 });
+      this.bossLabel.setVisible(true);
+    } else {
+      this.bossLabel.setVisible(false);
+    }
+
     this.hpText.setText(`${Math.ceil(g.coreHp)} / ${g.coreMaxHp}`);
-    this.goldText.setText(`${g.gold} G`);
+    this.updateGold(g, time);
     this.waveText.setText(`WAVE ${Math.min(g.waveIndex + 1, WAVES.length)} / ${WAVES.length}`);
+
+    // 저체력 경고 비네트
+    const inRun = g.phase === 'BUILD' || g.phase === 'WAVE';
+    if (inRun && hpRatio > 0 && hpRatio < 0.3) {
+      this.vignette.setVisible(true).setAlpha(0.32 + 0.15 * Math.sin(time / 230));
+    } else {
+      this.vignette.setVisible(false);
+    }
 
     if (next === null) {
       this.levelText.setText(`Lv.${g.grid.level} MAX`);
@@ -259,7 +320,7 @@ export class UIScene extends Phaser.Scene {
     const isWave = g.phase === 'WAVE';
     this.startBtn.setVisible(isBuild);
     this.startGlow.setVisible(isBuild);
-    this.speedBtn.setVisible(isWave).setText(`▶▶  배속 ×${g.gameSpeed}`);
+    this.speedBtn.setVisible(isWave).setText(`▶▶  배속 ×${g.gameSpeed} (F)`);
     // 사거리 토글은 BUILD·WAVE 모두
     this.rangeBtn.setVisible(isBuild || isWave).setActive(g.showRanges);
     this.rangeLabel.setVisible(isBuild || isWave);
@@ -277,7 +338,42 @@ export class UIScene extends Phaser.Scene {
 
     if (g.phase === 'END' && !this.ended) {
       this.ended = true;
-      this.showResult(g.victory);
+      // 마지막 처치/파괴 연출이 보이도록 잠깐 여유를 두고 결과 표시
+      this.time.delayedCall(g.victory ? 500 : 700, () => this.showResult(g.victory));
+    }
+  }
+
+  /** 골드 카운트업 + 증가 펄스 + 스로틀된 +N 플로트 */
+  private updateGold(g: GameScene, time: number): void {
+    if (this.shownGold < 0) {
+      this.shownGold = g.gold;
+      this.lastGold = g.gold;
+    }
+    if (g.gold > this.lastGold) {
+      this.goldAccum += g.gold - this.lastGold;
+      this.tweens.killTweensOf(this.goldText);
+      this.goldText.setScale(1.16);
+      this.tweens.add({ targets: this.goldText, scale: 1, duration: 200, ease: 'Cubic.easeOut' });
+    }
+    this.lastGold = g.gold;
+
+    if (this.shownGold !== g.gold) {
+      const diff = g.gold - this.shownGold;
+      // 획득은 굴러 올라가고, 지출은 빠르게 반영
+      const step = diff > 0 ? Math.max(1, Math.ceil(diff * 0.16)) : Math.min(-1, Math.floor(diff * 0.4));
+      this.shownGold += step;
+      if ((diff > 0 && this.shownGold > g.gold) || (diff < 0 && this.shownGold < g.gold)) this.shownGold = g.gold;
+    }
+    this.goldText.setText(`${this.shownGold} G`);
+
+    if (this.goldAccum > 0 && time - this.lastGoldFloat > 600) {
+      this.lastGoldFloat = time;
+      const ft = this.add
+        .text(this.goldFloatX, 50, `+${this.goldAccum}`, { fontSize: '14px', color: UI.gold, fontFamily: UI.FONT_DISPLAY, fontStyle: 'bold' })
+        .setOrigin(0.5, 0)
+        .setDepth(3);
+      this.tweens.add({ targets: ft, y: 72, alpha: 0, duration: 750, ease: 'Cubic.easeOut', onComplete: () => ft.destroy() });
+      this.goldAccum = 0;
     }
   }
 
@@ -319,53 +415,124 @@ export class UIScene extends Phaser.Scene {
     const cx = WORLD.width / 2;
     const cy = WORLD.height / 2;
     const accent = victory ? UI.success : UI.danger;
-    this.overlay.push(this.add.rectangle(cx, cy, WORLD.width, WORLD.height, 0x05070e, 0.74).setDepth(50).setInteractive());
+
+    const dim = this.add.rectangle(cx, cy, WORLD.width, WORLD.height, 0x05070e, 0.74).setDepth(50).setInteractive().setAlpha(0);
+    this.tweens.add({ targets: dim, alpha: 1, duration: 320, ease: 'Sine.easeOut' });
+    this.overlay.push(dim);
 
     const pw = 480;
     const ph = 270;
-    const g = this.add.graphics().setDepth(51);
+    const g = this.add.graphics().setDepth(51).setAlpha(0).setY(16);
     panel(g, cx - pw / 2, cy - ph / 2, pw, ph, { fill: UI.panelFill, fillAlpha: 0.98, border: accent, lineWidth: 2, cut: 20, bracket: true, bracketColor: accent, bracketLen: 26 });
+    this.tweens.add({ targets: g, alpha: 1, y: 0, duration: 300, delay: 120, ease: 'Cubic.easeOut' });
     this.overlay.push(g);
 
-    this.overlay.push(
-      this.add.text(cx, cy - 82, victory ? '승리' : '코어 파괴됨', { fontSize: '46px', color: victory ? '#8ffcd0' : '#ff8a80', fontFamily: UI.FONT, fontStyle: 'bold' }).setOrigin(0.5).setDepth(52).setShadow(0, 0, victory ? '#4ee6a0' : '#ff6b5e', 14),
-    );
-    this.overlay.push(
-      this.add.text(cx, cy - 40, victory ? '20번의 웨이브를 모두 막아내고 코어를 지켜냈습니다.' : '다시 도전해 보세요.', { fontSize: '16px', color: UI.textDim, fontFamily: UI.FONT }).setOrigin(0.5).setDepth(52),
-    );
+    const title = this.add
+      .text(cx, cy - 82, victory ? 'VICTORY' : '코어 파괴됨', { fontSize: '46px', color: victory ? '#8ffcd0' : '#ff8a80', fontFamily: UI.FONT_DISPLAY, fontStyle: 'bold' })
+      .setOrigin(0.5)
+      .setDepth(52)
+      .setShadow(0, 0, victory ? '#4ee6a0' : '#ff6b5e', 14)
+      .setLetterSpacing(3)
+      .setAlpha(0)
+      .setScale(0.7);
+    this.tweens.add({ targets: title, alpha: 1, scale: 1, duration: 300, delay: 220, ease: 'Back.easeOut' });
+    this.overlay.push(title);
 
-    // 런 요약
+    const sub = this.add
+      .text(cx, cy - 40, victory ? '20번의 웨이브를 모두 막아내고 코어를 지켜냈습니다.' : '다시 도전해 보세요.', { fontSize: '16px', color: UI.textDim, fontFamily: UI.FONT })
+      .setOrigin(0.5)
+      .setDepth(52)
+      .setAlpha(0);
+    this.tweens.add({ targets: sub, alpha: 1, duration: 250, delay: 360 });
+    this.overlay.push(sub);
+
+    // 런 요약 — 순차 등장, 처치·골드는 카운트업
     const gs = this.game_;
     const wavesCleared = Math.min(gs.waveIndex, WAVES.length);
     const elites = gs.placeables.filter((p) => p.def.kind === 'unit' && p.rank >= 2).length;
     const vets = gs.placeables.filter((p) => p.def.kind === 'unit' && p.rank >= 1).length;
-    const stats: [string, string][] = [
-      ['생존 웨이브', `${wavesCleared} / ${WAVES.length}`],
-      ['처치', `${gs.totalKills}`],
-      ['최종 골드', `${gs.gold}`],
-      ['영토', `Lv.${gs.grid.level}`],
-      ['정예·베테랑', `${elites} · ${vets}`],
+    const stats: { label: string; val: string; countTo?: number }[] = [
+      { label: '생존 웨이브', val: `${wavesCleared} / ${WAVES.length}` },
+      { label: '처치', val: `${gs.totalKills}`, countTo: gs.totalKills },
+      { label: '최종 골드', val: `${gs.gold}`, countTo: gs.gold },
+      { label: '영토', val: `Lv.${gs.grid.level}` },
+      { label: '정예·베테랑', val: `${elites} · ${vets}` },
     ];
     const gap = 92;
     const startX = cx - (gap * (stats.length - 1)) / 2;
-    stats.forEach(([label, val], i) => {
+    stats.forEach((st, i) => {
       const sx = startX + i * gap;
-      this.overlay.push(this.add.text(sx, cy + 2, val, { fontSize: '22px', color: '#eaf6ff', fontFamily: UI.FONT, fontStyle: 'bold' }).setOrigin(0.5).setDepth(52));
-      this.overlay.push(this.add.text(sx, cy + 26, label, { fontSize: '12px', color: UI.textDim, fontFamily: UI.FONT }).setOrigin(0.5).setDepth(52));
+      const delay = 420 + i * 90;
+      const valText = this.add
+        .text(sx, cy + 14, st.val, { fontSize: '22px', color: '#eaf6ff', fontFamily: UI.FONT_DISPLAY, fontStyle: 'bold' })
+        .setOrigin(0.5)
+        .setDepth(52)
+        .setAlpha(0);
+      const labelText = this.add
+        .text(sx, cy + 38, st.label, { fontSize: '12px', color: UI.textDim, fontFamily: UI.FONT })
+        .setOrigin(0.5)
+        .setDepth(52)
+        .setAlpha(0);
+      this.tweens.add({ targets: [valText, labelText], alpha: 1, y: '-=12', duration: 260, delay, ease: 'Cubic.easeOut' });
+      if (st.countTo !== undefined && st.countTo > 0) {
+        const target = st.countTo;
+        valText.setText('0');
+        this.tweens.addCounter({
+          from: 0,
+          to: target,
+          duration: 650,
+          delay: delay + 120,
+          ease: 'Cubic.easeOut',
+          onUpdate: (tw) => valText.setText(`${Math.round(tw.getValue() ?? target)}`),
+        });
+      }
+      this.overlay.push(valText, labelText);
     });
 
-    this.overlayBtns.push(new TextButton(this, cx - 108, cy + 78, 196, 52, '다시 시작', { variant: 'primary', fontSize: 19, depth: 52, onClick: () => this.restartRun() }));
-    this.overlayBtns.push(new TextButton(this, cx + 108, cy + 78, 196, 52, '타이틀로', { variant: 'default', fontSize: 19, depth: 52, onClick: () => this.toTitle() }));
+    const restart = new TextButton(this, cx - 108, cy + 78, 196, 52, '다시 시작', { variant: 'primary', fontSize: 19, depth: 52, onClick: () => this.restartRun() });
+    const toTitle = new TextButton(this, cx + 108, cy + 78, 196, 52, '타이틀로', { variant: 'default', fontSize: 19, depth: 52, onClick: () => this.toTitle() });
+    for (const [i, btn] of [restart, toTitle].entries()) {
+      btn.setAlpha(0);
+      this.tweens.addCounter({ from: 0, to: 1, duration: 260, delay: 900 + i * 80, onUpdate: (tw) => btn.setAlpha(tw.getValue() ?? 1) });
+      this.overlayBtns.push(btn);
+    }
+
+    // 승리 축포
+    if (victory) {
+      const confetti = this.add
+        .particles(0, 0, 'shard', {
+          x: { min: 0, max: WORLD.width },
+          y: -12,
+          speedY: { min: 130, max: 280 },
+          speedX: { min: -50, max: 50 },
+          rotate: { min: 0, max: 360 },
+          tint: [0x4ee6a0, 0x3ff0e0, 0xffcf5a, 0xffffff, 0xb98bff],
+          scale: { start: 1, end: 0.4 },
+          alpha: { start: 1, end: 0 },
+          lifespan: 2800,
+          quantity: 2,
+          frequency: 40,
+        })
+        .setDepth(53);
+      this.time.delayedCall(2600, () => confetti.stop());
+      this.overlay.push(confetti);
+    }
   }
 
   private restartRun(): void {
-    this.scene.start('Game');
-    this.scene.restart();
+    this.cameras.main.fadeOut(280, 4, 7, 14);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      this.scene.start('Game');
+      this.scene.restart();
+    });
   }
 
   private toTitle(): void {
-    this.scene.stop('Game');
-    this.scene.start('Title');
-    this.scene.stop();
+    this.cameras.main.fadeOut(280, 4, 7, 14);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      this.scene.stop('Game');
+      this.scene.start('Title');
+      this.scene.stop();
+    });
   }
 }

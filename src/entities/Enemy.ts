@@ -22,6 +22,7 @@ export class Enemy {
   private body: Phaser.GameObjects.Image;
   private baseScale: number;
   private hpBg: Phaser.GameObjects.Rectangle;
+  private hpGhost: Phaser.GameObjects.Rectangle;
   private hpFill: Phaser.GameObjects.Rectangle;
   private slowUntil = 0;
   private slowPct = 0;
@@ -45,6 +46,12 @@ export class Enemy {
     this.body.setScale(this.baseScale);
     this.hpBg = scene.add
       .rectangle(x - HP_BAR_WIDTH / 2, y - this.def.radius - 8, HP_BAR_WIDTH, 4, 0x2a2a2a)
+      .setOrigin(0, 0.5)
+      .setDepth(3)
+      .setVisible(false);
+    // 피해 잔상: 이전 HP가 밝게 남았다가 뒤따라 줄어든다
+    this.hpGhost = scene.add
+      .rectangle(x - HP_BAR_WIDTH / 2, y - this.def.radius - 8, HP_BAR_WIDTH, 4, 0xffe0d8)
       .setOrigin(0, 0.5)
       .setDepth(3)
       .setVisible(false);
@@ -127,6 +134,7 @@ export class Enemy {
 
   takeDamage(amount: number, scene: GameScene, killer?: Placeable): void {
     if (this.dead || this.hp <= 0) return;
+    const prevRatio = Math.max(this.hp / this.maxHp, 0);
     this.hp -= amount;
     if (this.hp <= 0) {
       this.die(scene, true, killer);
@@ -137,8 +145,13 @@ export class Enemy {
     this.body.setTint(0xffffff);
     this.body.setScale(this.baseScale * 1.18);
     scene.tweens.add({ targets: this.body, scale: this.baseScale, duration: 90 });
+    const ratio = Math.max(this.hp / this.maxHp, 0);
     this.hpBg.setVisible(true);
-    this.hpFill.setVisible(true).setScale(Math.max(this.hp / this.maxHp, 0), 1);
+    this.hpFill.setVisible(true).setScale(ratio, 1);
+    // 잔상: 이전 비율에서 잠깐 머문 뒤 현재 비율로 따라온다
+    scene.tweens.killTweensOf(this.hpGhost);
+    this.hpGhost.setVisible(true).setScale(Math.max(this.hpGhost.scaleX, prevRatio), 1);
+    scene.tweens.add({ targets: this.hpGhost, scaleX: ratio, delay: 150, duration: 200, ease: 'Cubic.easeOut' });
   }
 
   applySlow(pct: number, durationSec: number, scene: GameScene): void {
@@ -164,6 +177,7 @@ export class Enemy {
   private syncVisuals(): void {
     this.body.setPosition(this.x, this.y);
     this.hpBg.setPosition(this.x - HP_BAR_WIDTH / 2, this.y - this.def.radius - 8);
+    this.hpGhost.setPosition(this.x - HP_BAR_WIDTH / 2, this.y - this.def.radius - 8);
     this.hpFill.setPosition(this.x - HP_BAR_WIDTH / 2, this.y - this.def.radius - 8);
   }
 
@@ -171,8 +185,10 @@ export class Enemy {
     if (this.dead) return;
     this.dead = true;
     this.hp = 0;
+    scene.tweens.killTweensOf(this.hpGhost);
     this.body.destroy();
     this.hpBg.destroy();
+    this.hpGhost.destroy();
     this.hpFill.destroy();
     scene.onEnemyDead(this, killed, killer);
   }

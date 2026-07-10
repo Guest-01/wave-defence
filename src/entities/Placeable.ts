@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { PLACEABLES, PROJECTILE_SPEED, UPGRADE, VETERAN, type PlaceableDef, type PlaceableKey } from '../data/balance';
 import { CARD_FX } from '../data/cards';
 import type { GameScene } from '../scenes/GameScene';
+import { UI } from '../systems/ui';
 import type { Enemy } from './Enemy';
 
 const HP_BAR_WIDTH = 36;
@@ -54,7 +55,7 @@ export class Placeable {
     this.body.setData('placeable', this);
 
     this.label = scene.add
-      .text(pos.x, pos.y + 14, this.def.short, { fontSize: '13px', color: '#ffffff', fontFamily: 'sans-serif' })
+      .text(pos.x, pos.y + 14, this.def.short, { fontSize: '13px', color: '#ffffff', fontFamily: UI.FONT })
       .setOrigin(0.5)
       .setDepth(2)
       .setShadow(1, 1, '#000000', 2);
