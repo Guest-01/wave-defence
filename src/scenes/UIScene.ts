@@ -49,6 +49,8 @@ export class UIScene extends Phaser.Scene {
   private speedBtn!: TextButton;
   private muteBtn!: IconButton;
   private rangeBtn!: IconButton;
+  /** 사거리 토글 라벨 (버튼과 같은 표시 조건, 켜짐 상태 색 반영) */
+  private rangeLabel!: Phaser.GameObjects.Text;
   /** 배치 바 장식 (그룹 구분선·라벨) — BUILD에서만 표시 */
   private barDeco: (Phaser.GameObjects.Graphics | Phaser.GameObjects.Text)[] = [];
   /** 호버 툴팁 (공유 1개) */
@@ -250,8 +252,14 @@ export class UIScene extends Phaser.Scene {
 
     this.buildTooltip();
 
-    // 사거리 상시 표시 토글 (BUILD·WAVE)
+    // 사거리 상시 표시 토글 (BUILD·WAVE) — 아이콘만으로는 기능이 안 읽혀 라벨·단축키 병기
     this.rangeBtn = new IconButton(this, WORLD.width - 262, barY, 44, drawRangeIcon, () => this.game_.toggleRanges());
+    this.rangeLabel = this.add
+      .text(WORLD.width - 290, barY, '사거리 (R)', { fontSize: '13px', color: UI.textDim, fontFamily: UI.FONT, fontStyle: 'bold' })
+      .setOrigin(1, 0.5)
+      .setDepth(40)
+      .setInteractive({ useHandCursor: true });
+    this.rangeLabel.on('pointerdown', () => this.game_.toggleRanges());
 
     // 웨이브 시작 버튼 (히어로 — 발광 헤일로 + 맥동)
     const sx = WORLD.width - 122;
@@ -472,8 +480,9 @@ export class UIScene extends Phaser.Scene {
     this.startBtn.setVisible(isBuild);
     this.startGlow.setVisible(isBuild);
     this.speedBtn.setVisible(isWave).setText(`▶▶  배속 ×${g.gameSpeed} (F)`);
-    // 사거리 토글은 BUILD·WAVE 모두
+    // 사거리 토글은 BUILD·WAVE 모두 (라벨 색 = 켜짐 상태)
     this.rangeBtn.setVisible(isBuild || isWave).setActive(g.showRanges);
+    this.rangeLabel.setVisible(isBuild || isWave).setColor(g.showRanges ? UI.accentText : UI.textDim);
 
     this.muteBtn.setActive(g.sfx.isMuted());
     this.updateOnboarding(g, isBuild);
