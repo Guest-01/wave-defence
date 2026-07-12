@@ -50,10 +50,11 @@ export class DraftScene extends Phaser.Scene {
       .setAlpha(0);
     this.tweens.add({ targets: [eyebrow, title], alpha: 1, y: '-=8', duration: 300, delay: 120, ease: 'Cubic.easeOut' });
 
+    // buildCard의 y = 최종 정착 중심 (내부에서 +46 아래 생성 후 딜 인 트윈으로 복귀)
     const total = this.cards.length * CARD_W + (this.cards.length - 1) * CARD_GAP;
     const containers = this.cards.map((key, i) => {
       const x = cx - total / 2 + CARD_W / 2 + i * (CARD_W + CARD_GAP);
-      return this.buildCard(x, cy + 40, key);
+      return this.buildCard(x, cy + 10, key);
     });
 
     // 순차 딜 인 (아래에서 떠오르며 등장)
@@ -69,7 +70,7 @@ export class DraftScene extends Phaser.Scene {
     });
     this.game_.sfx.play('cardDeal');
 
-    this.buildActions(cx, cy + 156);
+    this.buildActions(cx, cy + 170);
   }
 
   /** 하단 액션 — 다시 뽑기(제시당 1회, 골드 소모) · 건너뛰기(+골드) */
