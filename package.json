@@ -1,8 +1,8 @@
 {
   "name": "wave-defence",
   "private": true,
-  "version": "0.4.0",
-  "description": "코어 중심 그리드 방어 + 로그라이트 드래프트 웨이브 디펜스 (Phaser 4 · TypeScript · Vite)",
+  "version": "0.5.0",
+  "description": "肄붿뼱 以묒떖 洹몃━??諛⑹뼱 + 濡쒓렇?쇱씠???쒕옒?꾪듃 ?⑥씠釉??뷀렂??(Phaser 4 쨌 TypeScript 쨌 Vite)",
   "license": "MIT",
   "type": "module",
   "scripts": {

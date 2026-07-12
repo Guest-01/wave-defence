@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { ENEMIES, type EnemyDef, type EnemyKey } from '../data/balance';
+import { CARD_FX } from '../data/cards';
 import type { GameScene } from '../scenes/GameScene';
 import type { Placeable } from './Placeable';
 
@@ -32,9 +33,14 @@ export class Enemy {
   private attackingCore = false;
   private attackCooldown = 0;
   private dead = false;
+  /** 미세 흔들림 위상 (개체별로 달라 물량이 기계적으로 안 보이게) */
+  private readonly wobblePhase = Math.random() * Math.PI * 2;
+  /** 중량급(탱커·보스)은 흔들림 없이 묵직하게 직진 */
+  private readonly heavy: boolean;
 
   constructor(scene: GameScene, readonly key: EnemyKey, x: number, y: number, hpScale: number) {
     this.def = ENEMIES[key];
+    this.heavy = key === 'tank' || key === 'boss';
     this.maxHp = Math.round(this.def.hp * hpScale);
     this.hp = this.maxHp;
     this.x = x;
@@ -76,6 +82,11 @@ export class Enemy {
     if (this.def.behavior === 'attacker') {
       if (this.target && !this.target.alive) this.target = null;
       if (this.target || this.attackingCore) {
+        // 가시 철조망 카드: 바리케이드를 물고 있는 동안 지속 피해
+        if (this.target && this.target.key === 'barricade' && scene.mods.barbedWire) {
+          this.takeDamage(CARD_FX.barbedWireDps * dt, scene);
+          if (this.dead) return;
+        }
         this.attackCooldown -= dt;
         if (this.attackCooldown <= 0) {
           this.attackCooldown = this.def.attackInterval ?? 1;
@@ -95,7 +106,15 @@ export class Enemy {
     const dist = Math.hypot(dx, dy) || 1;
     this.x += (dx / dist) * speed * dt;
     this.y += (dy / dist) * speed * dt;
-    this.syncVisuals();
+    // 경량 적은 이동 방향에 수직인 미세 사인 흔들림 (시각 전용 — 판정은 x/y 그대로)
+    let ox = 0;
+    let oy = 0;
+    if (!this.heavy) {
+      const w = Math.sin(scene.gameNow / 180 + this.wobblePhase) * 2.5;
+      ox = (-dy / dist) * w;
+      oy = (dx / dist) * w;
+    }
+    this.syncVisuals(ox, oy);
     this.body.setAlpha(slowed ? 0.6 : 1);
 
     // 코어 접촉
@@ -174,8 +193,8 @@ export class Enemy {
     scene.tweens.add({ targets: this.body, scale: this.baseScale, duration: 140 });
   }
 
-  private syncVisuals(): void {
-    this.body.setPosition(this.x, this.y);
+  private syncVisuals(ox = 0, oy = 0): void {
+    this.body.setPosition(this.x + ox, this.y + oy);
     this.hpBg.setPosition(this.x - HP_BAR_WIDTH / 2, this.y - this.def.radius - 8);
     this.hpGhost.setPosition(this.x - HP_BAR_WIDTH / 2, this.y - this.def.radius - 8);
     this.hpFill.setPosition(this.x - HP_BAR_WIDTH / 2, this.y - this.def.radius - 8);

@@ -19,8 +19,12 @@ const C = {
   cannon: 0x7c8cff,
   mortar: 0xb98bff,
   frost: 0x8fd8ff,
+  tesla: 0xbfefff,
+  generator: 0x7ee0a3,
+  barricade: 0x8195b5,
   grunt: 0xff5a4d,
   runner: 0xff9f2e,
+  splitter: 0xff4d94,
   tank: 0xe0463b,
   boss: 0xff2e6e,
 };
@@ -45,8 +49,12 @@ export function generateArtTextures(scene: Phaser.Scene): void {
   tex(scene, 'cannon', 130, 130, drawCannon);
   tex(scene, 'mortar', 130, 130, drawMortar);
   tex(scene, 'frost', 120, 120, drawFrost);
+  tex(scene, 'tesla', 130, 130, drawTesla);
+  tex(scene, 'generator', 130, 130, drawGenerator);
+  tex(scene, 'barricade', 120, 110, drawBarricade);
   tex(scene, 'grunt', 100, 100, drawGrunt);
   tex(scene, 'runner', 84, 84, drawRunner);
+  tex(scene, 'splitter', 104, 104, drawSplitter);
   tex(scene, 'tank', 120, 120, drawTank);
   tex(scene, 'boss', 180, 180, drawBoss);
 }
@@ -322,6 +330,101 @@ function drawFrost(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void
   g.strokePoints(core, true, true);
 }
 
+function drawTesla(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
+  // 코일 기둥 + 상단 방전 구체 (연쇄 번개)
+  glow(g, cx, cy - 10, 44, C.tesla, 12, 0.4);
+  // 육각 베이스
+  const base = poly(cx, cy + 34, 6, 22, 0);
+  g.fillStyle(0x14304a, 1);
+  g.fillPoints(base, true);
+  g.lineStyle(3, C.tesla, 0.9);
+  g.strokePoints(base, true, true);
+  // 기둥
+  g.fillStyle(0x2a4a6a, 1);
+  g.fillRect(cx - 6, cy - 22, 12, 50);
+  g.lineStyle(2, 0x0e2438, 1);
+  g.strokeRect(cx - 6, cy - 22, 12, 50);
+  // 코일 링 3개
+  g.lineStyle(4, C.tesla, 1);
+  for (const dy of [-14, -2, 10]) {
+    g.strokeEllipse(cx, cy + dy, 30, 10);
+  }
+  // 방전 구체 (백열 중심)
+  glow(g, cx, cy - 38, 20, C.tesla, 8, 0.6);
+  g.fillStyle(C.tesla, 1);
+  g.fillCircle(cx, cy - 38, 13);
+  g.fillStyle(0xffffff, 1);
+  g.fillCircle(cx, cy - 38, 6);
+  // 짧은 방전 갈래 2개 (지그재그)
+  g.lineStyle(2.5, 0xffffff, 0.9);
+  g.beginPath();
+  g.moveTo(cx + 12, cy - 44);
+  g.lineTo(cx + 22, cy - 50);
+  g.lineTo(cx + 19, cy - 42);
+  g.lineTo(cx + 28, cy - 46);
+  g.strokePath();
+  g.beginPath();
+  g.moveTo(cx - 12, cy - 32);
+  g.lineTo(cx - 22, cy - 28);
+  g.lineTo(cx - 18, cy - 36);
+  g.lineTo(cx - 27, cy - 34);
+  g.strokePath();
+}
+
+function drawGenerator(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
+  // 육각 반응로 + 골드 코어 (경제)
+  glow(g, cx, cy, 44, C.generator, 12, 0.4);
+  const hex = poly(cx, cy, 6, 40, 0);
+  g.fillStyle(0x123a2c, 1);
+  g.fillPoints(hex, true);
+  g.lineStyle(3, C.generator, 1);
+  g.strokePoints(hex, true, true);
+  // 모서리 볼트
+  g.fillStyle(0x0a2018, 1);
+  for (const p of poly(cx, cy, 6, 32, 0)) g.fillCircle(p.x, p.y, 3.5);
+  // 내부 링
+  g.lineStyle(2.5, C.generator, 0.7);
+  g.strokeCircle(cx, cy, 22);
+  // 골드 코어 (수익 암시)
+  glow(g, cx, cy, 16, 0xffcf5a, 8, 0.55);
+  g.fillStyle(0xffcf5a, 1);
+  g.fillPoints(poly(cx, cy, 4, 13, 0), true);
+  g.fillStyle(0xfff3d0, 1);
+  g.fillCircle(cx, cy, 4.5);
+}
+
+function drawBarricade(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
+  // X자 교차 빔 방벽 (무기 없음 = 순수 장애물)
+  glow(g, cx, cy, 38, C.barricade, 10, 0.3);
+  const beam = (angle: number) => {
+    const hw = 44; // 빔 절반 길이
+    const ht = 10; // 빔 절반 두께
+    const ca = Math.cos(angle);
+    const sa = Math.sin(angle);
+    return [
+      v(cx - ca * hw - sa * ht, cy - sa * hw + ca * ht),
+      v(cx - ca * hw + sa * ht, cy - sa * hw - ca * ht),
+      v(cx + ca * hw + sa * ht, cy + sa * hw - ca * ht),
+      v(cx + ca * hw - sa * ht, cy + sa * hw + ca * ht),
+    ];
+  };
+  for (const angle of [Math.PI / 4, -Math.PI / 4]) {
+    const pts = beam(angle);
+    g.fillStyle(C.barricade, 1);
+    g.fillPoints(pts, true);
+    g.lineStyle(3, 0x2a3448, 1);
+    g.strokePoints(pts, true, true);
+  }
+  // 중앙 결속 플레이트
+  const plate = poly(cx, cy, 4, 15, 0);
+  g.fillStyle(0x3a4a68, 1);
+  g.fillPoints(plate, true);
+  g.lineStyle(2, 0xb9c8e0, 0.9);
+  g.strokePoints(plate, true, true);
+  g.fillStyle(0xb9c8e0, 1);
+  g.fillCircle(cx, cy, 4);
+}
+
 // ── 적 (따뜻한 색, 대칭 실루엣) ────────────────────────────────
 
 function drawGrunt(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
@@ -349,6 +452,28 @@ function drawRunner(g: Phaser.GameObjects.Graphics, cx: number, cy: number): voi
   g.strokePoints(s, true, true);
   g.fillStyle(0xfff0d8, 0.95);
   g.fillCircle(cx, cy, 5);
+}
+
+function drawSplitter(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {
+  // 쌍세포 블롭 — 가운데 균열선이 "둘로 갈라짐"을 암시 (좌우 대칭)
+  glow(g, cx, cy, 34, C.splitter, 12, 0.5);
+  const off = 11;
+  g.fillStyle(C.splitter, 1);
+  g.fillCircle(cx - off, cy, 17);
+  g.fillCircle(cx + off, cy, 17);
+  g.lineStyle(3, 0x8a1548, 1);
+  g.strokeCircle(cx - off, cy, 17);
+  g.strokeCircle(cx + off, cy, 17);
+  // 양쪽 핵 (각각 다음 개체가 될 씨앗)
+  g.fillStyle(0x3a0d20, 1);
+  g.fillCircle(cx - off, cy, 6);
+  g.fillCircle(cx + off, cy, 6);
+  g.fillStyle(0xffd0e0, 0.9);
+  g.fillCircle(cx - off - 4, cy - 5, 3);
+  g.fillCircle(cx + off - 4, cy - 5, 3);
+  // 중앙 균열선
+  g.lineStyle(2.5, 0xffffff, 0.85);
+  g.lineBetween(cx, cy - 14, cx, cy + 14);
 }
 
 function drawTank(g: Phaser.GameObjects.Graphics, cx: number, cy: number): void {

@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
-import { PLACEABLES, PROJECTILE_SPEED, UPGRADE, VETERAN, type PlaceableDef, type PlaceableKey } from '../data/balance';
+import { EQUIPMENT, PLACEABLES, PROJECTILE_SPEED, SPECIALIZE, UPGRADE, VETERAN, type EquipmentDef, type PlaceableDef, type PlaceableKey, type SpecializeDef } from '../data/balance';
 import { CARD_FX } from '../data/cards';
 import type { GameScene } from '../scenes/GameScene';
+import type { SavedPlaceable } from '../systems/SaveGame';
 import { UI } from '../systems/ui';
 import type { Enemy } from './Enemy';
 
@@ -29,6 +30,8 @@ export class Placeable {
   kills = 0;
   /** 유닛 베테랑 계급 (0 신병 / 1 베테랑 / 2 정예) */
   rank = 0;
+  /** 유닛 장비 보유 (유닛당 1회 구매) */
+  equipped = false;
   /** 적 접촉 판정 반경 */
   readonly contactRadius = 24;
 
@@ -74,6 +77,8 @@ export class Placeable {
     if (this.def.kind === 'unit') {
       this.body.setInteractive({ useHandCursor: true });
       scene.input.setDraggable(this.body);
+      // 클릭(드래그 아님) → 정보·장비 팝업. 드래그 구분은 dragDistanceThreshold + lastDragEndAt
+      this.body.on('pointerup', () => scene.onUnitClicked(this));
       // 신병 훈련소 카드: 새 유닛이 베테랑으로 시작
       if (scene.mods.veteranRecruits) this.promote();
     } else {
@@ -85,6 +90,20 @@ export class Placeable {
   /** 전투 업데이트: 사거리 내 가장 가까운 적을 공격 */
   update(dt: number, scene: GameScene): void {
     if (!this.alive) return;
+
+    // 프로스트 특화(절대 영도): 주기 공격 대신 사거리 내 모든 적 상시 감속
+    if (this.def.slow && this.specialize?.aura) {
+      const slow = this.effectiveSlow()!;
+      for (const e of scene.enemies) {
+        const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y);
+        if (d <= this.range + e.def.radius) e.applySlow(slow.pct, 0.3, scene); // 짧게 계속 갱신 = 상시
+      }
+      return;
+    }
+
+    // 무공격 구조물 (발전기·바리케이드)
+    if (this.def.rate <= 0 || this.def.damage <= 0) return;
+
     this.cooldown -= dt;
     if (this.cooldown > 0) return;
 
@@ -92,7 +111,7 @@ export class Placeable {
     let bestDist = Infinity;
     for (const e of scene.enemies) {
       const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y);
-      if (d <= this.def.range + e.def.radius && d < bestDist) {
+      if (d <= this.range + e.def.radius && d < bestDist) {
         best = e;
         bestDist = d;
       }
@@ -101,25 +120,34 @@ export class Placeable {
 
     const mods = scene.mods;
     this.cooldown = 1 / (this.def.rate * mods.rateMult);
-    const dmg = this.effectiveDamage() * mods.damageMult;
+    let dmg = this.effectiveDamage() * mods.damageMult;
+    // 캐논 특화(과충전 탄두): 확률 치명타
+    const spec = this.specialize;
+    if (spec?.critChance && spec.critMult && Math.random() < spec.critChance) {
+      dmg *= spec.critMult;
+    }
     const slow = this.effectiveSlow();
     const speed = this.def.projectileSpeed ?? PROJECTILE_SPEED;
-    if (!this.def.melee) {
+    if (!this.def.melee && !this.def.chain) {
       scene.sfx.play('shoot');
       // 총구 섬광 (대상 방향으로 살짝 오프셋)
       const a = Math.atan2(best.y - this.y, best.x - this.x);
       scene.muzzleFlash(this.x + Math.cos(a) * 16, this.y + Math.sin(a) * 16, this.def.color);
     }
 
-    if (this.def.melee) {
+    if (this.def.chain) {
+      // 테슬라: 즉시 명중 연쇄 번개 — 가까운 적으로 튀며 감쇠
+      this.chainAttack(scene, best, dmg);
+    } else if (this.def.melee) {
       // 근접: 즉시 타격
       scene.meleeVisual(this.x, this.y, best.x, best.y, this.def.color);
       scene.sfx.play('melee');
       if (slow) best.applySlow(slow.pct, slow.duration, scene);
       scene.applyHit(best, dmg, this);
     } else if (this.def.aoeRadius) {
-      // 광역: 포탄이 발사 시점의 대상 위치로 날아가 폭발 (명중 시 피해)
-      scene.spawnLob(this.x, this.y, best.x, best.y, dmg, this.def.aoeRadius, this.def.color, speed, this);
+      // 광역: 포탄이 발사 시점의 대상 위치로 날아가 폭발 (명중 시 피해). 특화(광역 확장) 반영
+      const aoe = spec?.aoeRadius ?? this.def.aoeRadius;
+      scene.spawnLob(this.x, this.y, best.x, best.y, dmg, aoe, this.def.color, speed, this);
     } else if (this.key === 'cannon' && mods.pierce) {
       // 관통탄 카드: 캐논이 직선 관통 발사체를 쏨
       scene.spawnPierce(
@@ -153,6 +181,82 @@ export class Placeable {
     }
   }
 
+  /** 테슬라 연쇄: 첫 대상에서 탐색 반경 내 다음 적으로 튀며 감쇠 피해 */
+  private chainAttack(scene: GameScene, first: Enemy, dmg: number): void {
+    const chain = this.def.chain!;
+    const mods = scene.mods;
+    const maxTargets = mods.overloadCoil
+      ? Number.POSITIVE_INFINITY
+      : chain.targets + (this.specialize?.chainBonus ?? 0);
+    const decay = mods.overloadCoil ? CARD_FX.overloadCoilDecay : chain.decay;
+
+    const hits: Enemy[] = [first];
+    let cur = first;
+    while (hits.length < maxTargets) {
+      let next: Enemy | null = null;
+      let nd = Infinity;
+      for (const e of scene.enemies) {
+        if (e.hp <= 0 || hits.includes(e)) continue;
+        const d = Phaser.Math.Distance.Between(cur.x, cur.y, e.x, e.y);
+        if (d <= chain.radius && d < nd) {
+          next = e;
+          nd = d;
+        }
+      }
+      if (!next) break;
+      hits.push(next);
+      cur = next;
+    }
+
+    // 피해 적용 전에 경로를 그린다 (사망으로 좌표가 사라지기 전에)
+    scene.lightningVisual([{ x: this.x, y: this.y - 14 }, ...hits.map((e) => ({ x: e.x, y: e.y }))], this.def.color);
+    scene.sfx.play('zap');
+    let d = dmg;
+    for (const e of hits) {
+      scene.applyHit(e, d, this);
+      d *= 1 - decay;
+    }
+  }
+
+  /** 최대 강화(Lv3) 도달 시의 특화 정의. 미도달·해당 없음이면 null */
+  get specialize(): SpecializeDef | null {
+    if (this.def.kind !== 'structure' || !this.isMaxLevel) return null;
+    return SPECIALIZE[this.key] ?? null;
+  }
+
+  /** 장비 반영 사거리 */
+  get range(): number {
+    const eq = this.equipped ? EQUIPMENT[this.key] : undefined;
+    return this.def.range + (eq?.rangeBonus ?? 0);
+  }
+
+  /** 이 유닛이 구매할 수 있는 장비 정의 (구조물·해당 없음이면 null) */
+  get equipment(): EquipmentDef | null {
+    return EQUIPMENT[this.key] ?? null;
+  }
+
+  /** 골드가 충분하면 장비 구매·즉시 적용. 성공 여부 반환 */
+  buyEquipment(scene: GameScene): boolean {
+    const eq = this.equipment;
+    if (!eq || this.equipped || scene.gold < eq.cost) return false;
+    scene.gold -= eq.cost;
+    this.equipped = true;
+    if (eq.hpMult) {
+      const add = this.maxHp * (eq.hpMult - 1);
+      this.maxHp += add;
+      this.hp += add;
+    }
+    return true;
+  }
+
+  /** 발전기 웨이브 클리어 수익 (업그레이드·특화·복리 배당 반영). 발전기가 아니면 0 */
+  waveIncome(scene: GameScene): number {
+    if (!this.def.income) return 0;
+    let inc = this.def.income * (1 + UPGRADE.generatorIncomePerLevel * this.level);
+    inc *= this.specialize?.incomeMult ?? 1;
+    return Math.round(inc * scene.mods.generatorIncomeMult);
+  }
+
   /** 성장 반영 공격력 — 유닛은 베테랑 계급, 구조물은 업그레이드 단계 */
   private effectiveDamage(): number {
     if (this.def.kind === 'unit') {
@@ -182,11 +286,11 @@ export class Placeable {
     if (this.def.kind !== 'unit' || this.isMaxRank) return;
     this.rank++;
     this.kills = Math.max(this.kills, VETERAN.killThresholds[this.rank - 1]);
-    // 최고 계급: 최대 HP 보너스 (현재 HP도 증가분만큼 회복)
+    // 최고 계급: 최대 HP 보너스 (가산 — 장비 보너스를 덮어쓰지 않도록)
     if (this.isMaxRank) {
-      const newMax = this.def.hp * (1 + VETERAN.eliteHpBonus);
-      this.hp += newMax - this.maxHp;
-      this.maxHp = newMax;
+      const add = this.def.hp * VETERAN.eliteHpBonus;
+      this.maxHp += add;
+      this.hp += add;
     }
     this.label.setText(this.def.short + '★'.repeat(this.rank));
     this.label.setColor(this.rank >= 2 ? '#f5d547' : '#ffffff');
@@ -202,6 +306,31 @@ export class Placeable {
     return this.level >= UPGRADE.maxLevel;
   }
 
+  /** 강화 팝업용 — 현재 → 다음 단계의 대표 수치 미리보기 (런 수정치 반영). 최대 레벨·해당 없음이면 null */
+  upgradePreview(scene: GameScene): { label: string; from: string; to: string } | null {
+    if (this.def.kind !== 'structure' || this.isMaxLevel) return null;
+    const next = this.level + 1;
+    // 프로스트: 공격력(2)보다 감속률이 대표 수치
+    if (this.key === 'frost' && this.def.slow) {
+      const pct = (l: number) => Math.round((this.def.slow!.pct + UPGRADE.frostSlowPerLevel * l) * 100);
+      return { label: '감속', from: `${pct(this.level)}%`, to: `${pct(next)}%` };
+    }
+    if (this.def.income) {
+      const inc = (l: number) =>
+        Math.round(this.def.income! * (1 + UPGRADE.generatorIncomePerLevel * l) * scene.mods.generatorIncomeMult);
+      return { label: '수익', from: `+${inc(this.level)}G`, to: `+${inc(next)}G` };
+    }
+    if (this.key === 'barricade') {
+      const hp = (l: number) => Math.round(this.def.hp * scene.mods.structHpMult * (1 + UPGRADE.barricadeHpPerLevel * l));
+      return { label: '최대 HP', from: `${hp(this.level)}`, to: `${hp(next)}` };
+    }
+    if (this.def.damage > 0) {
+      const dmg = (l: number) => Math.round(this.def.damage * (1 + UPGRADE.damagePerLevel * l) * scene.mods.damageMult);
+      return { label: '공격', from: `${dmg(this.level)}`, to: `${dmg(next)}` };
+    }
+    return null;
+  }
+
   /** 다음 단계 업그레이드 비용. 최대 레벨이면 null */
   upgradeCost(): number | null {
     if (this.def.kind !== 'structure' || this.isMaxLevel) return null;
@@ -215,6 +344,12 @@ export class Placeable {
     scene.gold -= cost;
     this.invested += cost;
     this.level++;
+    // 바리케이드: 업그레이드 효과가 공격력이 아닌 최대 HP (+50%/단계)
+    if (this.key === 'barricade') {
+      const newMax = this.def.hp * scene.mods.structHpMult * (1 + UPGRADE.barricadeHpPerLevel * this.level);
+      this.hp += Math.max(0, newMax - this.maxHp);
+      this.maxHp = newMax;
+    }
     this.label.setText(`${this.def.short}+${this.level}`);
     return true;
   }
@@ -237,6 +372,16 @@ export class Placeable {
         this.hpBg.setVisible(false);
         this.hpFill.setVisible(false);
       } else {
+        // 바리케이드 특화(반응 장갑): 파괴 시 주변 폭발
+        const spec = this.specialize;
+        if (spec?.novaDamage && spec.novaRadius) {
+          scene.explosionVisual(this.x, this.y, spec.novaRadius, this.def.color);
+          scene.sfx.play('explosion');
+          for (const e of [...scene.enemies]) {
+            const d = Phaser.Math.Distance.Between(this.x, this.y, e.x, e.y);
+            if (d <= spec.novaRadius + e.def.radius) e.takeDamage(spec.novaDamage, scene);
+          }
+        }
         scene.deathBurst(this.x, this.y, this.def.color);
         this.destroyVisuals();
         scene.removePlaceable(this);
@@ -245,6 +390,23 @@ export class Placeable {
     }
     this.hpBg.setVisible(true);
     this.hpFill.setVisible(true).setScale(this.hp / this.maxHp, 1);
+  }
+
+  /** 저장된 런 복원 — 성장 상태를 통째로 되살리고 라벨을 다시 그린다 (이어하기) */
+  restoreFrom(s: SavedPlaceable): void {
+    this.level = s.level;
+    this.invested = s.invested;
+    this.kills = s.kills;
+    this.rank = s.rank;
+    this.equipped = s.equipped;
+    this.maxHp = s.maxHp;
+    this.hp = s.hp;
+    if (this.def.kind === 'unit') {
+      this.label.setText(this.def.short + '★'.repeat(this.rank));
+      this.label.setColor(this.rank >= 2 ? '#f5d547' : '#ffffff');
+    } else if (this.level > 0) {
+      this.label.setText(`${this.def.short}+${this.level}`);
+    }
   }
 
   /** 유닛 부활 (BUILD 페이즈 시작 시) */

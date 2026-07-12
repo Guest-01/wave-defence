@@ -1,8 +1,9 @@
 import Phaser from 'phaser';
-import { WORLD } from '../data/balance';
+import { PLACEABLE_ORDER, WORLD } from '../data/balance';
+import { clearRun, loadBest, loadRun } from '../systems/SaveGame';
 import { TextButton, UI, panel } from '../systems/ui';
 
-const VERSION = 'v0.4.0';
+const VERSION = 'v0.5.0';
 
 export class TitleScene extends Phaser.Scene {
   constructor() {
@@ -62,6 +63,21 @@ export class TitleScene extends Phaser.Scene {
       .setAlpha(0);
     this.tweens.add({ targets: version, alpha: 1, duration: 400, delay: 350 });
 
+    // 최고 기록 (localStorage)
+    const best = loadBest();
+    if (best) {
+      const bestText = this.add
+        .text(cx, cy - 34, `최고 기록 — ${best.victory ? '전 웨이브 클리어!' : `WAVE ${best.reached} 도달`}`, {
+          fontSize: '13px',
+          color: UI.gold,
+          fontFamily: UI.FONT,
+          fontStyle: 'bold',
+        })
+        .setOrigin(0.5)
+        .setAlpha(0);
+      this.tweens.add({ targets: bestText, alpha: 1, duration: 400, delay: 400 });
+    }
+
     const intro = this.add
       .text(
         cx,
@@ -98,8 +114,8 @@ export class TitleScene extends Phaser.Scene {
         cx,
         ctrlY + 2,
         [
-          '배치: 하단 버튼 또는 1~5 키 → 그리드 클릭  ·  우클릭/ESC 취소',
-          '유닛 재배치: 웨이브 사이 드래그  ·  R 사거리  ·  F 배속  ·  ESC/P 일시정지',
+          `배치: 하단 버튼 또는 1~${PLACEABLE_ORDER.length} 키 → 그리드 클릭  ·  우클릭/ESC 취소`,
+          'Space 웨이브 시작  ·  유닛 재배치: 웨이브 사이 드래그  ·  R 사거리  ·  F 배속  ·  ESC/P 일시정지',
         ].join('\n'),
         { fontSize: '14px', color: '#9fb2cc', fontFamily: UI.FONT, align: 'center', lineSpacing: 8 },
       )
@@ -107,16 +123,41 @@ export class TitleScene extends Phaser.Scene {
       .setAlpha(0);
     this.tweens.add({ targets: [ctrlG, ctrlTitle, ctrlText], alpha: 1, duration: 400, delay: 550 });
 
-    // 시작 버튼 (마지막 등장)
-    const startBtn = new TextButton(this, cx, cy + 186, 240, 58, '게임 시작', {
-      variant: 'primary',
-      fontSize: 23,
-      onClick: () => {
-        this.cameras.main.fadeOut(280, 4, 7, 14);
-        this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => this.scene.start('Game'));
-      },
-    });
-    startBtn.setAlpha(0);
-    this.tweens.addCounter({ from: 0, to: 1, duration: 320, delay: 700, onUpdate: (tw) => startBtn.setAlpha(tw.getValue() ?? 1) });
+    // 시작 버튼 (마지막 등장). 저장된 런이 있으면 이어하기 + 새 게임 2버튼
+    const go = (data?: { continue: boolean }) => {
+      this.cameras.main.fadeOut(280, 4, 7, 14);
+      this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => this.scene.start('Game', data));
+    };
+    const save = loadRun();
+    const buttons: TextButton[] = [];
+    if (save) {
+      buttons.push(
+        new TextButton(this, cx - 125, cy + 186, 235, 58, `이어하기 (WAVE ${save.waveIndex + 1})`, {
+          variant: 'primary',
+          fontSize: 19,
+          onClick: () => go({ continue: true }),
+        }),
+        new TextButton(this, cx + 125, cy + 186, 235, 58, '새 게임', {
+          variant: 'default',
+          fontSize: 19,
+          onClick: () => {
+            clearRun();
+            go();
+          },
+        }),
+      );
+    } else {
+      buttons.push(
+        new TextButton(this, cx, cy + 186, 240, 58, '게임 시작', {
+          variant: 'primary',
+          fontSize: 23,
+          onClick: () => go(),
+        }),
+      );
+    }
+    for (const btn of buttons) {
+      btn.setAlpha(0);
+      this.tweens.addCounter({ from: 0, to: 1, duration: 320, delay: 700, onUpdate: (tw) => btn.setAlpha(tw.getValue() ?? 1) });
+    }
   }
 }

@@ -5,7 +5,10 @@ import {
   DEMOLISH_REFUND,
   ENEMIES,
   GRID,
+  PERFECT_BONUS,
   PLACEABLES,
+  SPECIALIZE,
+  SPLIT,
   START_GOLD,
   VETERAN,
   WAVE_HP_SCALE,
@@ -14,13 +17,23 @@ import {
   type EnemyKey,
   type PlaceableKey,
 } from '../data/balance';
-import { CARDS, CARD_FX, type CardKey } from '../data/cards';
+import { CARDS, CARD_FX, DRAFT, type CardKey } from '../data/cards';
 import { WAVES, type Direction } from '../data/waves';
 import { Enemy } from '../entities/Enemy';
 import { Placeable } from '../entities/Placeable';
 import { Projectile } from '../entities/Projectile';
 import { Grid, type Cell } from '../systems/Grid';
-import { Sfx } from '../systems/Sfx';
+import {
+  clearRun,
+  loadBest,
+  loadRun,
+  saveRun,
+  updateBest,
+  type BestRecord,
+  type RunSave,
+} from '../systems/SaveGame';
+import { shakeEnabled } from '../systems/Settings';
+import { Sfx, type BgmMode } from '../systems/Sfx';
 import { TextButton, UI, panel } from '../systems/ui';
 
 export type Phase = 'BUILD' | 'WAVE' | 'DRAFT' | 'END';
@@ -36,6 +49,12 @@ export interface Mods {
   exposeWeakness: boolean;
   bounty: boolean;
   interest: boolean;
+  /** 과부하 코일: 테슬라 연쇄 무제한 + 감쇠 완화 */
+  overloadCoil: boolean;
+  /** 가시 철조망: 바리케이드 접촉 지속 피해 */
+  barbedWire: boolean;
+  /** 복리 배당: 발전기 수익 배율 */
+  generatorIncomeMult: number;
   refundRate: number;
   damageMult: number;
   rateMult: number;
@@ -104,6 +123,8 @@ export class GameScene extends Phaser.Scene {
   private ghost: Ghost | null = null;
   private drag: DragState | null = null;
   private structUi: StructUi | null = null;
+  /** 직전 드래그 종료 시각 — 드래그 직후의 pointerup을 유닛 클릭으로 오인하지 않기 위함 */
+  private lastDragEndAt = 0;
   /** 처치한 적 총합 (결과 요약용) */
   totalKills = 0;
   /** 전투 배속 (1/2/3). WAVE에서만 적용 */
@@ -119,6 +140,14 @@ export class GameScene extends Phaser.Scene {
   private lastPhase: Phase = 'BUILD';
   /** 살아 있는 토스트 (겹침 방지 스택) */
   private toasts: Phaser.GameObjects.Text[] = [];
+  /** 이번 웨이브에 코어가 피해를 입었는지 (PERFECT 보너스 판정) */
+  private coreDamagedThisWave = false;
+  /** 결과 화면용 기록 정보 (end에서 채움) */
+  record: { reached: number; isNew: boolean; best: BestRecord | null } | null = null;
+  /** 이번 런에서 선택한 카드 전체 (결과 화면 빌드 요약용, 즉발 포함) */
+  cardHistory: CardKey[] = [];
+  /** 현재 드래프트 제시에서 리롤을 이미 썼는지 */
+  rerolledThisDraft = false;
 
   constructor() {
     super('Game');
@@ -135,6 +164,9 @@ export class GameScene extends Phaser.Scene {
       exposeWeakness: false,
       bounty: false,
       interest: false,
+      overloadCoil: false,
+      barbedWire: false,
+      generatorIncomeMult: 1,
       refundRate: DEMOLISH_REFUND,
       damageMult: 1,
       rateMult: 1,
@@ -144,7 +176,7 @@ export class GameScene extends Phaser.Scene {
     };
   }
 
-  create(): void {
+  create(data?: { continue?: boolean }): void {
     // 씬 재시작 대비 상태 초기화
     this.phase = 'BUILD';
     this.gold = START_GOLD;
@@ -165,6 +197,7 @@ export class GameScene extends Phaser.Scene {
     this.ghost = null;
     this.drag = null;
     this.structUi = null;
+    this.lastDragEndAt = 0;
     this.totalKills = 0;
     this.gameSpeed = 1;
     this.gameNow = 0;
@@ -173,6 +206,10 @@ export class GameScene extends Phaser.Scene {
     this.lastPhase = 'BUILD';
     this.previewLabels = [];
     this.toasts = [];
+    this.coreDamagedThisWave = false;
+    this.record = null;
+    this.cardHistory = [];
+    this.rerolledThisDraft = false;
     this.applyTimeScale();
 
     this.cameras.main.fadeIn(320, 4, 7, 14);
@@ -206,6 +243,8 @@ export class GameScene extends Phaser.Scene {
       ease: 'Sine.easeInOut',
     });
 
+    // 유닛 클릭(팝업)과 드래그(재배치)를 구분 — 6px 이상 움직여야 드래그로 판정
+    this.input.dragDistanceThreshold = 6;
     this.input.on('pointermove', (p: Phaser.Input.Pointer) => this.onPointerMove(p));
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => this.onPointerDown(p));
     this.input.keyboard?.on('keydown-ESC', () => {
@@ -215,10 +254,80 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard?.on('keydown-P', () => this.requestPause());
     this.input.keyboard?.on('keydown-R', () => this.toggleRanges());
     this.input.keyboard?.on('keydown-F', () => this.cycleSpeed());
+    // 웨이브 시작 (BUILD에서만 동작 — startWave 내부 가드). 페이지 스크롤 방지 캡처
+    this.input.keyboard?.addCapture('SPACE');
+    this.input.keyboard?.on('keydown-SPACE', () => this.startWave());
 
     this.setupUnitDrag();
 
     if (!this.scene.isActive('UI')) this.scene.launch('UI');
+
+    // 이어하기: 타이틀에서 continue 플래그와 함께 시작된 경우 저장된 런 복원
+    if (data?.continue) {
+      const save = loadRun();
+      if (save) this.restoreRun(save);
+    }
+
+    this.sfx.bgmStart('build');
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.sfx.bgmStop());
+  }
+
+  // ── 런 저장 · 복원 (이어하기) ─────────────────────────────────
+
+  /** 현재 런 상태를 localStorage에 저장 (웨이브 시작 직전 · 드래프트 선택 직후) */
+  private persistRun(): void {
+    if (this.phase === 'END') return;
+    const save: RunSave = {
+      v: 1,
+      waveIndex: this.waveIndex,
+      gold: this.gold,
+      xp: this.xp,
+      coreHp: this.coreHp,
+      coreMaxHp: this.coreMaxHp,
+      totalKills: this.totalKills,
+      mods: this.mods,
+      acquired: [...this.acquired],
+      cardHistory: [...this.cardHistory],
+      placeables: this.placeables.map((p) => ({
+        key: p.key,
+        col: p.col,
+        row: p.row,
+        level: p.level,
+        invested: p.invested,
+        kills: p.kills,
+        rank: p.rank,
+        equipped: p.equipped,
+        hp: p.hp,
+        maxHp: p.maxHp,
+      })),
+    };
+    saveRun(save);
+  }
+
+  private restoreRun(s: RunSave): void {
+    this.waveIndex = Math.min(s.waveIndex, WAVES.length - 1);
+    this.gold = s.gold;
+    this.xp = s.xp;
+    this.coreHp = s.coreHp;
+    this.coreMaxHp = s.coreMaxHp;
+    this.totalKills = s.totalKills;
+    this.mods = { ...this.freshMods(), ...s.mods };
+    this.acquired = new Set(s.acquired);
+    this.cardHistory = [...(s.cardHistory ?? [])];
+    // 그리드 레벨은 XP에서 재계산
+    while (this.grid.level < this.grid.maxLevel && this.xp >= XP_THRESHOLDS[this.grid.level - 1]) {
+      this.grid.expand();
+    }
+    this.drawGrid();
+    for (const sp of s.placeables) {
+      if (!this.grid.isFree(sp.col, sp.row)) continue;
+      const p = new Placeable(this, sp.key, sp.col, sp.row);
+      p.restoreFrom(sp);
+      this.grid.occupy(sp.col, sp.row);
+      this.placeables.push(p);
+    }
+    this.previewDirty = true;
+    this.toast(`이어하기 — WAVE ${this.waveIndex + 1}`);
   }
 
   update(_time: number, deltaMs: number): void {
@@ -259,6 +368,11 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /** 화면 흔들림 — 접근성 설정(wd_shake)이 꺼져 있으면 생략 */
+  shake(duration: number, intensity: number): void {
+    if (shakeEnabled()) this.cameras.main.shake(duration, intensity);
+  }
+
   /** 일시정지 메뉴 열기 (HUD 버튼·ESC·P에서 호출) */
   requestPause(): void {
     if (this.phase === 'END') return;
@@ -292,6 +406,15 @@ export class GameScene extends Phaser.Scene {
 
   private onPhaseChange(phase: Phase): void {
     this.applyTimeScale();
+    // BGM 모드: 전투는 베이스·아르페지오 레이어, 보스 웨이브는 저음 강조, 그 외 차분
+    if (phase === 'WAVE') {
+      const hasBoss = WAVES[this.waveIndex]?.groups.some((g) => g.enemy === 'boss') ?? false;
+      this.sfx.bgmSetMode((hasBoss ? 'boss' : 'wave') satisfies BgmMode);
+    } else if (phase === 'END') {
+      this.sfx.bgmStop();
+    } else {
+      this.sfx.bgmSetMode('build');
+    }
     const build = phase === 'BUILD';
     this.previewGfx.setVisible(build);
     for (const l of this.previewLabels) l.setVisible(build);
@@ -307,11 +430,11 @@ export class GameScene extends Phaser.Scene {
     const rg = this.rangeGfx;
     rg.clear();
     for (const p of this.placeables) {
-      if (!p.alive) continue;
+      if (!p.alive || p.range <= 0) continue;
       rg.fillStyle(p.def.color, 0.05);
-      rg.fillCircle(p.x, p.y, p.def.range);
+      rg.fillCircle(p.x, p.y, p.range);
       rg.lineStyle(1, p.def.color, 0.4);
-      rg.strokeCircle(p.x, p.y, p.def.range);
+      rg.strokeCircle(p.x, p.y, p.range);
     }
   }
 
@@ -328,6 +451,42 @@ export class GameScene extends Phaser.Scene {
       byDir.set(grp.direction, m);
     }
     for (const [dir, comp] of byDir) this.drawDirIndicator(dir, comp);
+    this.drawNextRingPreview();
+  }
+
+  /** 레벨업 임박(다음 레벨 XP의 90%+) 시 다음 영토 외곽을 점선으로 예고 */
+  private drawNextRingPreview(): void {
+    const next = this.nextXpThreshold();
+    if (next === null || this.xp < next * 0.9) return;
+    const s = this.grid.cellSize;
+    const half = (this.grid.halfExtent + 1.5) * s;
+    const cx = this.grid.cx;
+    const cy = this.grid.cy;
+    const g = this.previewGfx;
+    g.lineStyle(2, 0x3ff0e0, 0.5);
+    const dash = 10;
+    const gap = 8;
+    const edges: [number, number, number, number][] = [
+      [cx - half, cy - half, cx + half, cy - half],
+      [cx + half, cy - half, cx + half, cy + half],
+      [cx + half, cy + half, cx - half, cy + half],
+      [cx - half, cy + half, cx - half, cy - half],
+    ];
+    for (const [x1, y1, x2, y2] of edges) {
+      const len = Math.hypot(x2 - x1, y2 - y1);
+      const ux = (x2 - x1) / len;
+      const uy = (y2 - y1) / len;
+      for (let d = 0; d < len; d += dash + gap) {
+        const e = Math.min(d + dash, len);
+        g.lineBetween(x1 + ux * d, y1 + uy * d, x1 + ux * e, y1 + uy * e);
+      }
+    }
+    const label = this.add
+      .text(cx, cy - half - 12, '레벨업 임박 — 다음 영토', { fontSize: '12px', color: '#7ff5e8', fontFamily: UI.FONT, fontStyle: 'bold' })
+      .setOrigin(0.5)
+      .setDepth(6)
+      .setShadow(1, 1, '#000000', 3);
+    this.previewLabels.push(label);
   }
 
   private drawDirIndicator(dir: Direction, comp: Map<EnemyKey, number>): void {
@@ -375,6 +534,10 @@ export class GameScene extends Phaser.Scene {
     this.cancelPlacement();
     this.closeStructUi();
 
+    // 배치 결정이 반영된 시점의 런 저장 (이자·증원 소비 전 — 복원 후 재적용돼도 중복 없음)
+    this.persistRun();
+    this.coreDamagedThisWave = false;
+
     // 이자 카드
     if (this.mods.interest) {
       const bonus = Math.min(Math.floor(this.gold * CARD_FX.interestRate), CARD_FX.interestCap);
@@ -407,6 +570,13 @@ export class GameScene extends Phaser.Scene {
     this.clearProjectiles();
     this.clearFires();
     this.closeStructUi();
+    // 무피해 클리어 보너스 (PERFECT)
+    if (!this.coreDamagedThisWave) {
+      this.gold += PERFECT_BONUS;
+      this.floatText(this.grid.cx, this.grid.cy - 46, `PERFECT +${PERFECT_BONUS}G`, '#ffd75e');
+      this.toast(`무피해 클리어 — PERFECT +${PERFECT_BONUS}G`);
+      this.sfx.play('upgrade');
+    }
     this.waveIndex++;
     if (this.waveIndex >= WAVES.length) {
       this.end(true);
@@ -414,6 +584,20 @@ export class GameScene extends Phaser.Scene {
     }
     this.gridGfx.setAlpha(1);
     for (const p of this.placeables) p.revive(this);
+    // 발전기 수익 (웨이브를 살아 넘긴 발전기만)
+    let income = 0;
+    for (const p of this.placeables) {
+      if (!p.alive) continue;
+      const inc = p.waveIncome(this);
+      if (inc > 0) {
+        income += inc;
+        this.floatText(p.x, p.y, `+${inc}`, '#f0c674');
+      }
+    }
+    if (income > 0) {
+      this.gold += income;
+      this.toast(`발전기 수익 +${income}G`);
+    }
     // 클리어 배너를 보여준 뒤 드래프트 제시 (배너가 오버레이에 가려지지 않게)
     this.banner('WAVE CLEAR', '#7ee0a3');
     this.phase = 'DRAFT';
@@ -425,12 +609,17 @@ export class GameScene extends Phaser.Scene {
   private end(victory: boolean): void {
     this.phase = 'END';
     this.victory = victory;
+    // 최고 기록 갱신 + 런 저장 삭제 (런 종료)
+    const reached = victory ? WAVES.length : this.waveIndex + 1;
+    const isNew = updateBest(reached, victory);
+    this.record = { reached, isNew, best: loadBest() };
+    clearRun();
     this.cancelPlacement();
     this.closeStructUi();
     this.clearProjectiles();
     this.clearFires();
     this.sfx.play(victory ? 'victory' : 'defeat');
-    if (!victory) this.cameras.main.shake(400, 0.01);
+    if (!victory) this.shake(400, 0.01);
   }
 
   private clearProjectiles(): void {
@@ -464,7 +653,7 @@ export class GameScene extends Phaser.Scene {
     this.enemies.push(new Enemy(this, key, x, y, hpScale));
     if (key === 'boss') {
       // 보스 입장: 지축이 울리는 흔들림 + 저음
-      this.cameras.main.shake(500, 0.006);
+      this.shake(500, 0.006);
       this.sfx.play('bossSpawn');
     }
   }
@@ -472,27 +661,54 @@ export class GameScene extends Phaser.Scene {
   // ── 드래프트 ─────────────────────────────────────────────────
 
   private offerDraft(): void {
-    // 훈장 수여: 진급 가능한 유닛이 없으면 죽은 카드이므로 미등장
-    const hasPromotableUnit = this.placeables.some((p) => p.def.kind === 'unit' && !p.isMaxRank);
-    const pool = (Object.keys(CARDS) as CardKey[]).filter((k) => {
-      if (CARDS[k].unique && this.acquired.has(k)) return false;
-      if (k === 'medal' && !hasPromotableUnit) return false;
-      return true;
-    });
-    Phaser.Utils.Array.Shuffle(pool);
-    const offer = pool.slice(0, 3);
+    const offer = this.rollDraft();
     if (offer.length === 0) {
       this.phase = 'BUILD';
       return;
     }
     this.phase = 'DRAFT';
+    this.rerolledThisDraft = false;
     this.scene.launch('Draft', { cards: offer });
+  }
+
+  /** 카드 풀에서 3장 추첨. exclude(현재 제시분)는 대안이 있을 때만 제외 */
+  rollDraft(exclude: CardKey[] = []): CardKey[] {
+    // 훈장 수여: 진급 가능한 유닛이 없으면 죽은 카드이므로 미등장
+    const hasPromotableUnit = this.placeables.some((p) => p.def.kind === 'unit' && !p.isMaxRank);
+    let pool = (Object.keys(CARDS) as CardKey[]).filter((k) => {
+      if (CARDS[k].unique && this.acquired.has(k)) return false;
+      if (k === 'medal' && !hasPromotableUnit) return false;
+      return true;
+    });
+    const filtered = pool.filter((k) => !exclude.includes(k));
+    if (filtered.length > 0) pool = filtered;
+    Phaser.Utils.Array.Shuffle(pool);
+    return pool.slice(0, 3);
+  }
+
+  /** 드래프트 다시 뽑기 (제시당 1회, 골드 소모). 불가하면 null */
+  rerollDraft(current: CardKey[]): CardKey[] | null {
+    if (this.rerolledThisDraft || this.gold < DRAFT.rerollCost) return null;
+    this.gold -= DRAFT.rerollCost;
+    this.rerolledThisDraft = true;
+    this.sfx.play('roll');
+    return this.rollDraft(current);
+  }
+
+  /** 드래프트 건너뛰기 — 카드를 포기하고 골드 보상 */
+  skipDraft(): void {
+    this.gold += DRAFT.skipGold;
+    this.toast(`드래프트 건너뛰기 +${DRAFT.skipGold}G`);
+    this.sfx.play('card');
+    this.phase = 'BUILD';
+    this.persistRun();
   }
 
   /** DraftScene에서 카드 선택 시 호출 */
   applyCard(key: CardKey): void {
     const def = CARDS[key];
     if (def.unique) this.acquired.add(key);
+    this.cardHistory.push(key);
     let msg: string | null = `「${def.name}」 획득`;
 
     switch (key) {
@@ -513,6 +729,15 @@ export class GameScene extends Phaser.Scene {
         break;
       case 'coreDischarge':
         this.mods.coreDischarge = true;
+        break;
+      case 'overloadCoil':
+        this.mods.overloadCoil = true;
+        break;
+      case 'barbedWire':
+        this.mods.barbedWire = true;
+        break;
+      case 'dividend':
+        this.mods.generatorIncomeMult = CARD_FX.dividendMult;
         break;
       case 'exposeWeakness':
         this.mods.exposeWeakness = true;
@@ -575,6 +800,8 @@ export class GameScene extends Phaser.Scene {
     if (msg) this.toast(msg);
     this.sfx.play('card');
     this.phase = 'BUILD';
+    // 드래프트 선택이 반영된 시점의 런 저장
+    this.persistRun();
   }
 
   /** 전투 도박사: 슬롯머신식 숫자 롤링 → 결과 착지 (액수 구간별 반응 차등) */
@@ -627,7 +854,7 @@ export class GameScene extends Phaser.Scene {
       this.sfx.play(jackpot ? 'gamblerWin' : bust ? 'gamblerLose' : 'card');
       if (jackpot) {
         this.hitSpark(cx, cy + 8, UI.goldHex, 18);
-        this.cameras.main.shake(150, 0.003);
+        this.shake(150, 0.003);
       }
       if (bust) label.setText('아쉽네요...');
       // 잠깐 보여준 뒤 페이드아웃
@@ -675,6 +902,8 @@ export class GameScene extends Phaser.Scene {
   onEnemyDead(enemy: Enemy, killed: boolean, killer?: Placeable): void {
     const i = this.enemies.indexOf(enemy);
     if (i >= 0) this.enemies.splice(i, 1);
+    // 분열형: 죽는 방식과 무관하게(처치·자폭 모두) 그 자리에서 갈라진다
+    if (enemy.key === 'splitter' && this.phase === 'WAVE') this.splitEnemy(enemy);
     if (killed) {
       this.totalKills++;
       const isElite = enemy.key === 'tank' || enemy.key === 'boss';
@@ -689,13 +918,26 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /** 분열형 사망 지점에 일반 적을 생성 (현재 웨이브 스케일링 적용) */
+  private splitEnemy(e: Enemy): void {
+    const hpScale = 1 + WAVE_HP_SCALE * this.waveIndex;
+    for (let i = 0; i < SPLIT.count; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      this.enemies.push(
+        new Enemy(this, SPLIT.child, e.x + Math.cos(ang) * SPLIT.offset, e.y + Math.sin(ang) * SPLIT.offset, hpScale),
+      );
+    }
+    this.hitSpark(e.x, e.y, ENEMIES.splitter.color, 8);
+  }
+
   damageCore(amount: number): void {
     if (this.phase === 'END') return;
+    this.coreDamagedThisWave = true;
     this.coreHp -= amount;
     // 피격 체감: 화면 흔들림 (스팸 방지 스로틀)
     if (this.gameNow - this.lastShakeAt > 200) {
       this.lastShakeAt = this.gameNow;
-      this.cameras.main.shake(120, 0.004);
+      this.shake(120, 0.004);
       this.sfx.play('coreHit');
     }
     if (this.coreHp <= 0) {
@@ -787,8 +1029,18 @@ export class GameScene extends Phaser.Scene {
 
   // ── 배치 (BUILD) ─────────────────────────────────────────────
 
+  /** 현재 배치 모드의 배치물 (HUD 카드 선택 상태 표시용) */
+  get placementKey(): PlaceableKey | null {
+    return this.ghost?.key ?? null;
+  }
+
   enterPlacement(key: PlaceableKey): void {
     if (this.phase !== 'BUILD') return;
+    // 같은 카드 재선택(클릭·단축키) = 배치 모드 취소 (토글)
+    if (this.ghost?.key === key) {
+      this.cancelPlacement();
+      return;
+    }
     const def = PLACEABLES[key];
     if (this.gold < def.cost) return;
     this.cancelPlacement();
@@ -839,15 +1091,37 @@ export class GameScene extends Phaser.Scene {
 
     const def = PLACEABLES[this.ghost.key];
     const cell = this.grid.worldToCell(pointer.worldX, pointer.worldY);
-    if (!this.grid.isFree(cell.col, cell.row) || this.gold < def.cost) return;
+    // 그리드 밖 클릭은 배치 시도가 아님 (HUD 조작 등) — 조용히 무시
+    if (!this.grid.isInside(cell.col, cell.row)) return;
+    if (!this.grid.isFree(cell.col, cell.row) || this.gold < def.cost) {
+      this.denyPlacement();
+      return;
+    }
 
     this.gold -= def.cost;
     const p = new Placeable(this, this.ghost.key, cell.col, cell.row);
     this.grid.occupy(cell.col, cell.row);
     this.placeables.push(p);
-    this.cancelPlacement();
     this.previewDirty = true;
     this.sfx.play('place');
+    // 연속 배치: 골드가 충분하면 배치 모드 유지 (우클릭·ESC·같은 카드 재클릭으로 종료)
+    if (this.gold >= def.cost) this.updateGhost(pointer);
+    else this.cancelPlacement();
+  }
+
+  /** 불가 셀 클릭 거부 — 경고음 + 고스트 좌우 흔들림 ("왜 안 되지" 제거) */
+  private denyPlacement(): void {
+    this.sfx.play('deny');
+    const body = this.ghost?.body;
+    if (!body || this.tweens.isTweening(body)) return;
+    this.tweens.add({
+      targets: body,
+      angle: { from: -7, to: 7 },
+      duration: 45,
+      yoyo: true,
+      repeat: 2,
+      onComplete: () => body.setAngle(0),
+    });
   }
 
   // ── 구조물 관리 (업그레이드 / 철거) ──────────────────────────
@@ -858,16 +1132,17 @@ export class GameScene extends Phaser.Scene {
 
     const parts: { destroy(): void }[] = [];
     const cost = p.upgradeCost();
+    const preview = p.upgradePreview(this);
     const refund = Math.floor(p.invested * this.mods.refundRate);
-    const pw = 196;
-    const ph = 108;
+    const pw = 216;
+    const ph = 150;
     // 구조물 위에 띄우되, 상단에 가리면 아래로
-    let py = p.y - 82;
-    if (py - ph / 2 < 64) py = p.y + 82;
+    let py = p.y - 104;
+    if (py - ph / 2 < 64) py = p.y + 104;
 
-    // 이 구조물의 사거리 표시 (판단 보조)
+    // 이 구조물의 사거리 표시 (판단 보조 — 무공격 구조물은 반경 0이라 표시 없음)
     const range = this.add
-      .circle(p.x, p.y, p.def.range, p.def.color, 0.06)
+      .circle(p.x, p.y, p.range, p.def.color, 0.06)
       .setStrokeStyle(1, p.def.color, 0.45)
       .setDepth(9);
     parts.push(range);
@@ -897,16 +1172,48 @@ export class GameScene extends Phaser.Scene {
       .setDepth(12);
     parts.push(title);
 
+    // 강화 전→후 대표 수치 미리보기 (강화 가치 판단 근거)
+    if (preview) {
+      const prev = this.add
+        .text(p.x, py - ph / 2 + 33, `${preview.label} ${preview.from} → ${preview.to}`, {
+          fontSize: '12.5px',
+          color: '#8ffcd0',
+          fontFamily: UI.FONT_DISPLAY,
+          fontStyle: 'bold',
+        })
+        .setOrigin(0.5)
+        .setDepth(12);
+      parts.push(prev);
+    }
+
+    // 3단계 특화 안내 (해금 전엔 예고, 해금 후엔 효과 설명)
+    const specDef = SPECIALIZE[p.key];
+    if (specDef) {
+      const specText = p.isMaxLevel ? `★ ${specDef.name} — ${specDef.desc}` : `Lv3 특화: ${specDef.name} — ${specDef.desc}`;
+      const spec = this.add
+        .text(p.x, py - ph / 2 + 46, specText, {
+          fontSize: '10.5px',
+          color: p.isMaxLevel ? '#ffd75e' : UI.textDim,
+          fontFamily: UI.FONT,
+          align: 'center',
+          wordWrap: { width: pw - 26 },
+        })
+        .setOrigin(0.5, 0)
+        .setDepth(12);
+      parts.push(spec);
+    }
+
     // 강화 버튼
     const upLabel = cost === null ? '최대 강화' : `강화 → Lv${p.level + 1}    ${cost} G`;
-    const upBtn = new TextButton(this, p.x, py - 4, pw - 22, 30, upLabel, {
+    const upBtn = new TextButton(this, p.x, py + 18, pw - 22, 30, upLabel, {
       variant: 'default',
       fontSize: 13,
       depth: 12,
       cut: 8,
       onClick: () => {
         if (p.tryUpgrade(this)) {
-          this.toast(`${p.def.name} 강화 Lv${p.level}`);
+          const sp = p.specialize;
+          this.toast(sp ? `특화 해금 — ${sp.name}!` : `${p.def.name} 강화 Lv${p.level}`);
           this.sfx.play('upgrade');
         }
         this.closeStructUi();
@@ -916,7 +1223,7 @@ export class GameScene extends Phaser.Scene {
     parts.push(upBtn);
 
     // 철거 버튼 (환급은 누적 투자 기준)
-    const demoBtn = new TextButton(this, p.x, py + 32, pw - 22, 30, `철거    +${refund} G`, {
+    const demoBtn = new TextButton(this, p.x, py + 54, pw - 22, 30, `철거    +${refund} G`, {
       variant: 'danger',
       fontSize: 13,
       depth: 12,
@@ -924,6 +1231,96 @@ export class GameScene extends Phaser.Scene {
       onClick: () => this.demolish(p),
     });
     parts.push(demoBtn);
+
+    this.structUi = { parts, openedAt: this.time.now };
+  }
+
+  // ── 유닛 정보·장비 팝업 (BUILD, 클릭 — 드래그와 구분) ──────────
+
+  onUnitClicked(p: Placeable): void {
+    if (this.phase !== 'BUILD' || this.ghost || this.drag || !p.alive) return;
+    if (this.time.now - this.lastDragEndAt < 150) return;
+    this.closeStructUi();
+
+    const parts: { destroy(): void }[] = [];
+    const eq = p.equipment;
+    const pw = 216;
+    const ph = 112;
+    let py = p.y - 88;
+    if (py - ph / 2 < 64) py = p.y + 88;
+
+    // 사거리 원 (장비 보너스 반영)
+    const range = this.add
+      .circle(p.x, p.y, p.range, p.def.color, 0.06)
+      .setStrokeStyle(1, p.def.color, 0.45)
+      .setDepth(9);
+    parts.push(range);
+
+    const g = this.add.graphics().setDepth(11);
+    panel(g, p.x - pw / 2, py - ph / 2, pw, ph, {
+      fill: UI.panelFill,
+      fillAlpha: 0.98,
+      border: p.def.color,
+      lineWidth: 2,
+      cut: 12,
+      bracket: true,
+      bracketColor: p.def.color,
+      bracketLen: 14,
+    });
+    parts.push(g);
+
+    const title = this.add
+      .text(p.x, py - ph / 2 + 17, `${p.def.name}${p.rank > 0 ? ` ${'★'.repeat(p.rank)}` : ''}`, {
+        fontSize: '15px',
+        color: '#eaf2ff',
+        fontFamily: UI.FONT,
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+      .setDepth(12);
+    parts.push(title);
+
+    const rankName = p.rank > 0 ? VETERAN.rankNames[p.rank - 1] : '신병';
+    const nextKills = p.isMaxRank ? null : VETERAN.killThresholds[p.rank];
+    const info = this.add
+      .text(p.x, py - ph / 2 + 38, `${rankName} · 킬 ${p.kills}${nextKills !== null ? ` · 진급까지 ${Math.max(0, nextKills - p.kills)}킬` : ''}`, {
+        fontSize: '11px',
+        color: UI.textDim,
+        fontFamily: UI.FONT,
+      })
+      .setOrigin(0.5)
+      .setDepth(12);
+    parts.push(info);
+
+    if (eq && p.equipped) {
+      const owned = this.add
+        .text(p.x, py + 26, `장비 보유 — ${eq.name} (${eq.desc})`, {
+          fontSize: '12px',
+          color: '#8ffcd0',
+          fontFamily: UI.FONT,
+          fontStyle: 'bold',
+        })
+        .setOrigin(0.5)
+        .setDepth(12);
+      parts.push(owned);
+    } else if (eq) {
+      const buyBtn = new TextButton(this, p.x, py + 26, pw - 22, 30, `${eq.name} (${eq.desc})    ${eq.cost} G`, {
+        variant: 'default',
+        fontSize: 12,
+        depth: 12,
+        cut: 8,
+        onClick: () => {
+          if (p.buyEquipment(this)) {
+            this.toast(`${p.def.name} 장비 — ${eq.name}`);
+            this.sfx.play('upgrade');
+            this.previewDirty = true;
+          }
+          this.closeStructUi();
+        },
+      });
+      if (this.gold < eq.cost) buyBtn.setEnabled(false);
+      parts.push(buyBtn);
+    }
 
     this.structUi = { parts, openedAt: this.time.now };
   }
@@ -954,7 +1351,7 @@ export class GameScene extends Phaser.Scene {
       const p = obj.getData('placeable') as Placeable | undefined;
       if (!p || p.def.kind !== 'unit' || !p.alive || this.phase !== 'BUILD' || this.ghost) return;
       const range = this.add
-        .circle(p.x, p.y, p.def.range, p.def.color, 0.06)
+        .circle(p.x, p.y, p.range, p.def.color, 0.06)
         .setStrokeStyle(1, p.def.color, 0.35)
         .setDepth(10);
       this.drag = { p, fromCol: p.col, fromRow: p.row, range };
@@ -979,6 +1376,7 @@ export class GameScene extends Phaser.Scene {
       const { p, fromCol, fromRow, range } = this.drag;
       range.destroy();
       this.drag = null;
+      this.lastDragEndAt = this.time.now;
       const cell = this.grid.worldToCell(ptr.worldX, ptr.worldY);
       if (this.grid.isFree(cell.col, cell.row)) {
         p.setCell(cell.col, cell.row, this);
@@ -1103,6 +1501,40 @@ export class GameScene extends Phaser.Scene {
       onComplete: () => slash.destroy(),
     });
     this.hitSpark(toX, toY, color, 4);
+  }
+
+  /** 테슬라 연쇄 번개 — 경유점 사이를 지그재그로 잇는 발광 라인 (색 헤일로 + 흰 코어 2패스) */
+  lightningVisual(points: { x: number; y: number }[], color: number): void {
+    if (points.length < 2) return;
+    // 각 구간을 지그재그 중간점으로 쪼갠 폴리라인 생성
+    const path: { x: number; y: number }[] = [points[0]];
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i];
+      const b = points[i + 1];
+      const segs = 3;
+      for (let s = 1; s < segs; s++) {
+        const t = s / segs;
+        const nx = -(b.y - a.y);
+        const ny = b.x - a.x;
+        const len = Math.hypot(nx, ny) || 1;
+        const off = Phaser.Math.FloatBetween(-11, 11);
+        path.push({ x: a.x + (b.x - a.x) * t + (nx / len) * off, y: a.y + (b.y - a.y) * t + (ny / len) * off });
+      }
+      path.push(b);
+    }
+    const g = this.add.graphics().setDepth(5).setBlendMode(Phaser.BlendModes.ADD);
+    const stroke = (width: number, c: number, alpha: number) => {
+      g.lineStyle(width, c, alpha);
+      g.beginPath();
+      g.moveTo(path[0].x, path[0].y);
+      for (let i = 1; i < path.length; i++) g.lineTo(path[i].x, path[i].y);
+      g.strokePath();
+    };
+    stroke(6, color, 0.35);
+    stroke(2.5, 0xffffff, 0.95);
+    this.tweens.add({ targets: g, alpha: 0, duration: 160, ease: 'Cubic.easeIn', onComplete: () => g.destroy() });
+    // 명중점 스파크 (시작점 = 테슬라 본체는 제외)
+    for (let i = 1; i < points.length; i++) this.hitSpark(points[i].x, points[i].y, color, 4);
   }
 
   explosionVisual(x: number, y: number, radius: number, color: number): void {
