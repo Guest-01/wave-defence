@@ -50,7 +50,7 @@ npm create @phaserjs/game@latest
 
 - **UI 오버레이**: 점수판·메뉴는 Phaser 내장 텍스트/DOM으로 충분. 복잡해지면 공식 React 템플릿(template-react-ts) 검토
 - **멀티플레이**: Colyseus (Phaser+Colyseus 공식 모노레포 템플릿 존재, 2026-06)
-- **배포**: 정적 호스팅 (GitHub Pages / Vercel / itch.io)
+- **배포 (적용 완료)**: GitHub Pages — `main` 푸시마다 GitHub Actions(`.github/workflows/deploy.yml`)가 빌드·배포. 저장소 하위 경로(`/wave-defence/`)에서 서빙되므로 `vite.config.ts`의 `base: './'`(상대 경로)로 에셋 URL을 처리. 저장소 설정에서 Pages Source를 "GitHub Actions"로 지정해야 동작
 
 ## 3. 게임 기획안
 

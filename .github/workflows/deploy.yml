@@ -1,0 +1,44 @@
+# main 푸시마다 빌드 → GitHub Pages 배포.
+# 사전 조건: 저장소 Settings → Pages → Source를 "GitHub Actions"로 설정.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 배포 중복 방지 — 진행 중인 이전 배포는 취소
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # Vite 8 요구사항 (20.19+ / 22.12+)
+          cache: npm
+      - run: npm ci
+      - run: npm run build # typecheck(tsc --noEmit) 포함
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
