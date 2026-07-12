@@ -65,8 +65,8 @@ export const WAVES: WaveDef[] = [
       { enemy: 'runner', count: 6, interval: 0.7, direction: 'left', startDelay: 3 },
     ],
   },
-  // W8 — 고속 물량 압박 (광역 검증)
-  { groups: [{ enemy: 'runner', count: 12, interval: 0.5, direction: 'right' }] },
+  // W8 — 고속 물량 압박 (광역/감속 검증). 전부 새면 코어 −60 — 실질 위협이 되는 밀도
+  { groups: [{ enemy: 'runner', count: 20, interval: 0.35, direction: 'right' }] },
   // W9
   {
     groups: [
@@ -126,14 +126,15 @@ export const WAVES: WaveDef[] = [
       { enemy: 'runner', count: 12, interval: 0.5, direction: 'top', startDelay: 2 },
     ],
   },
-  // W17 — 상하 물량 + 좌우 탱커 (하단은 분열 섞임)
+  // W17 — 상하 물량 + 좌우 탱커 (하단은 분열 섞임).
+  // 탱커는 좌우 2+2 — W15 보스·W16 양측 탱커에 이은 3연속 고강도가 되지 않게 (비보스 최고 압력 완화)
   {
     groups: [
       { enemy: 'grunt', count: 14, interval: 0.55, direction: 'top' },
       { enemy: 'grunt', count: 8, interval: 0.55, direction: 'bottom' },
       { enemy: 'splitter', count: 3, interval: 1.4, direction: 'bottom', startDelay: 1 },
-      { enemy: 'tank', count: 3, interval: 2.5, direction: 'left', startDelay: 3 },
-      { enemy: 'tank', count: 3, interval: 2.5, direction: 'right', startDelay: 3 },
+      { enemy: 'tank', count: 2, interval: 2.5, direction: 'left', startDelay: 3 },
+      { enemy: 'tank', count: 2, interval: 2.5, direction: 'right', startDelay: 3 },
     ],
   },
   // W18 — 고속 러시
